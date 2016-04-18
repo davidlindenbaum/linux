@@ -509,6 +509,13 @@ struct mm_struct {
 #ifdef CONFIG_HUGETLB_PAGE
 	atomic_long_t hugetlb_usage;
 #endif
+	/*
+	 *  Variables for Badger Trap
+	 */
+	unsigned int badger_trap_en;
+	unsigned long total_dtlb_misses;
+	unsigned long total_dtlb_4k_misses;
+	unsigned long total_dtlb_hugetlb_misses;
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

@@ -52,6 +52,10 @@ static struct hstate * __initdata parsed_hstate;
 static unsigned long __initdata default_hstate_max_huge_pages;
 static unsigned long __initdata default_hstate_size;
 
+extern inline pte_t pte_mkreserve(pte_t pte);
+extern inline pte_t pte_unreserve(pte_t pte);
+extern inline int is_pte_reserved(pte_t pte);
+
 /*
  * Protects updates to hugepage_freelists, hugepage_activelist, nr_huge_pages,
  * free_huge_pages, and surplus_huge_pages.
@@ -3315,7 +3319,7 @@ static void unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
  */
 static int hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
 			unsigned long address, pte_t *ptep, pte_t pte,
-			struct page *pagecache_page, spinlock_t *ptl)
+			struct page *pagecache_page, spinlock_t *ptl, unsigned int flags)
 {
 	struct hstate *h = hstate_vma(vma);
 	struct page *old_page, *new_page;
@@ -3418,6 +3422,13 @@ retry_avoidcopy:
 		mmu_notifier_invalidate_range(mm, mmun_start, mmun_end);
 		set_huge_pte_at(mm, address, ptep,
 				make_huge_pte(vma, new_page, 1));
+
+		/* Make the page table entry as reserved for TLB miss tracking */
+		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INST)))
+		{
+			*ptep = pte_mkreserve(*ptep);
+		}
+
 		page_remove_rmap(old_page, true);
 		hugepage_add_new_anon_rmap(new_page, vma, address);
 		/* Make the old page be freed below */
@@ -3591,12 +3602,19 @@ retry:
 		page_dup_rmap(page, true);
 	new_pte = make_huge_pte(vma, page, ((vma->vm_flags & VM_WRITE)
 				&& (vma->vm_flags & VM_SHARED)));
+
+	/* Make the page table entry as reserved for TLB miss tracking */
+	if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INST)))
+	{
+		new_pte = pte_mkreserve(new_pte);
+	}
+
 	set_huge_pte_at(mm, address, ptep, new_pte);
 
 	hugetlb_count_add(pages_per_huge_page(h), mm);
 	if ((flags & FAULT_FLAG_WRITE) && !(vma->vm_flags & VM_SHARED)) {
 		/* Optimization, do the COW without a second fault */
-		ret = hugetlb_cow(mm, vma, address, ptep, new_pte, page, ptl);
+		ret = hugetlb_cow(mm, vma, address, ptep, new_pte, page, ptl, flags);
 	}
 
 	spin_unlock(ptl);
@@ -3610,6 +3628,49 @@ backout_unlocked:
 	unlock_page(page);
 	put_page(page);
 	goto out;
+}
+
+static int hugetlb_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+						unsigned long address, pte_t *page_table, unsigned int flags)
+{
+	unsigned long *touch_page_addr;
+	unsigned long touched;
+	unsigned long ret;
+	static unsigned int consecutive = 0;
+	static unsigned long prev_address = 0;
+
+	if(address == prev_address)
+		consecutive++;
+	else
+	{
+		consecutive = 0;
+		prev_address = address;
+       }
+
+	if(consecutive > 1)
+	{
+		*page_table = pte_unreserve(*page_table);
+		return 0;
+	}
+
+	if(flags & FAULT_FLAG_WRITE)
+		*page_table = huge_pte_mkdirty(*page_table);
+
+	*page_table = pte_mkyoung(*page_table);
+	*page_table = pte_unreserve(*page_table);
+
+	touch_page_addr = (void *)(address & PAGE_MASK);
+	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
+
+	if(ret)
+		return VM_FAULT_SIGBUS;
+
+	/* Here where we do all our analysis */
+	current->total_dtlb_hugetlb_misses++;
+	current->total_dtlb_misses++;
+
+	*page_table = pte_mkreserve(*page_table);
+	return 0;
 }
 
 #ifdef CONFIG_SMP
@@ -3663,7 +3724,42 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	address &= huge_page_mask(h);
 
+	mapping = vma->vm_file->f_mapping;
 	ptep = huge_pte_offset(mm, address);
+	idx = vma_hugecache_offset(h, vma, address);
+	hash = hugetlb_fault_mutex_hash(h, mm, vma, mapping, idx, address);
+
+	/*
+	 * Here we check for Huge page that are marked as reserved
+	 */
+	if(mm && mm->badger_trap_en && (!(flags & FAULT_FLAG_INST)) && ptep)
+	{
+		mutex_lock(&hugetlb_fault_mutex_table[hash]);
+		entry = huge_ptep_get(ptep);
+		if((flags & FAULT_FLAG_WRITE) && is_pte_reserved(entry) && !huge_pte_write(entry) && pte_present(entry))
+		{
+			ptl = huge_pte_lock(h, mm, ptep);
+			page = pte_page(entry);
+			get_page(page);
+			if (page != pagecache_page) lock_page(page);
+			spin_lock(&mm->page_table_lock);
+			ret = hugetlb_cow(mm, vma, address, ptep, entry,
+								pagecache_page, ptl, flags);
+			spin_unlock(&mm->page_table_lock);
+			goto out_put_page;
+		}
+		if(is_pte_reserved(entry) && pte_present(entry))
+		{
+			ret = hugetlb_fake_fault(mm, vma, address, ptep, flags);
+			goto out_mutex;
+		}
+		if(pte_present(entry))
+		{
+			*ptep = pte_mkreserve(*ptep);
+		}
+		mutex_unlock(&hugetlb_fault_mutex_table[hash]);
+	}
+
 	if (ptep) {
 		entry = huge_ptep_get(ptep);
 		if (unlikely(is_hugetlb_entry_migration(entry))) {
@@ -3678,15 +3774,11 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 			return VM_FAULT_OOM;
 	}
 
-	mapping = vma->vm_file->f_mapping;
-	idx = vma_hugecache_offset(h, vma, address);
-
 	/*
 	 * Serialize hugepage allocation and instantiation, so that we don't
 	 * get spurious allocation failures if two CPUs race to instantiate
 	 * the same page in the page cache.
 	 */
-	hash = hugetlb_fault_mutex_hash(h, mm, vma, mapping, idx, address);
 	mutex_lock(&hugetlb_fault_mutex_table[hash]);
 
 	entry = huge_ptep_get(ptep);
@@ -3751,7 +3843,7 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (flags & FAULT_FLAG_WRITE) {
 		if (!huge_pte_write(entry)) {
 			ret = hugetlb_cow(mm, vma, address, ptep, entry,
-					pagecache_page, ptl);
+					pagecache_page, ptl, flags);
 			goto out_put_page;
 		}
 		entry = huge_pte_mkdirty(entry);

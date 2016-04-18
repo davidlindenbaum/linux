@@ -982,6 +982,9 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 		goto fail_nomem;
 
 good_mm:
+	mm->total_dtlb_misses = 0;
+	mm->total_dtlb_4k_misses = 0;
+	mm->total_dtlb_hugetlb_misses = 0;
 	tsk->mm = mm;
 	tsk->active_mm = mm;
 	return 0;
