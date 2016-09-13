@@ -63,6 +63,7 @@
 #include <linux/dma-debug.h>
 #include <linux/debugfs.h>
 #include <linux/userfaultfd_k.h>
+#include <linux/badger_trap.h>
 
 #include <asm/io.h>
 #include <asm/mmu_context.h>
@@ -3359,8 +3360,7 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	current->total_dtlb_4k_misses++;
-	current->total_dtlb_misses++;
+	tlb_miss(mm->tlb_sim, address, 0);
 
 	*page_table = pte_mkreserve(*page_table);
 	pte_unmap_unlock(page_table, ptl);
@@ -3524,8 +3524,7 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	current->total_dtlb_hugetlb_misses++;
-	current->total_dtlb_misses++;
+	tlb_miss(mm->tlb_sim, address, 1);
 
 	*page_table = pmd_mkreserve(*page_table);
 	return 0;
@@ -3587,7 +3586,6 @@ static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		spin_unlock(&mm->page_table_lock);
 	}
 
-escape:
 	pmd = pmd_alloc(mm, pud, address);
 	if (!pmd)
 		return VM_FAULT_OOM;

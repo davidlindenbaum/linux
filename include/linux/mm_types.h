@@ -387,6 +387,7 @@ struct mm_rss_stat {
 };
 
 struct kioctx_table;
+struct tlb_sim;
 struct mm_struct {
 	struct vm_area_struct *mmap;		/* list of VMAs */
 	struct rb_root mm_rb;
@@ -513,9 +514,7 @@ struct mm_struct {
 	 *  Variables for Badger Trap
 	 */
 	unsigned int badger_trap_en;
-	unsigned long total_dtlb_misses;
-	unsigned long total_dtlb_4k_misses;
-	unsigned long total_dtlb_hugetlb_misses;
+	struct tlb_sim *tlb_sim;
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

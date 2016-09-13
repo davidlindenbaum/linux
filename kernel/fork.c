@@ -993,9 +993,7 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 		goto fail_nomem;
 
 good_mm:
-	mm->total_dtlb_misses = 0;
-	mm->total_dtlb_4k_misses = 0;
-	mm->total_dtlb_hugetlb_misses = 0;
+	if (mm->badger_trap_en) init_tlb_sim(mm);
 	tsk->mm = mm;
 	tsk->active_mm = mm;
 	return 0;

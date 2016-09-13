@@ -7,6 +7,20 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+int tlb_set_bits = 2;
+int tlb_entries_per_set = 16;
+int hugetlb_set_bits = 2;
+int hugetlb_entries_per_set = 16;
+char badger_trap_process[CONFIG_NR_CPUS][MAX_NAME_LEN] = {0};
+
+SYSCALL_DEFINE4(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set)
+{
+    tlb_set_bits = set_bits;
+    tlb_entries_per_set = entries_per_set;
+    hugetlb_set_bits = huge_set_bits;
+    hugetlb_entries_per_set = huge_entries_per_set;
+    return 0;
+}
 
 /*
  * This syscall is generic way of setting up badger trap. 
@@ -38,19 +52,18 @@ SYSCALL_DEFINE3(init_badger_trap, const char __user**, process_name, unsigned lo
 	char proc[MAX_NAME_LEN];
 	struct task_struct * tsk;
 	unsigned long pid;
-
-	printk("===================================\n");
-	printk("BT syscall\n");
-	printk("===================================\n");
+	char *process_name_k[num_procs];
+	copy_from_user(process_name_k, process_name, num_procs * sizeof(*process_name));
 
 	if(option > 0)
 	{
 		for(i=0; i<CONFIG_NR_CPUS; i++)
 		{
-			if(i<num_procs)
-				ret = strncpy_from_user(proc, process_name[i], MAX_NAME_LEN);
-			else
+			if(i<num_procs) {
+				ret = strncpy_from_user(proc, process_name_k[i], MAX_NAME_LEN);
+            } else {
 				temp = strncpy(proc,"",MAX_NAME_LEN);
+            }
 			temp = strncpy(badger_trap_process[i], proc, MAX_NAME_LEN-1);
 		}
 	}
@@ -68,7 +81,7 @@ SYSCALL_DEFINE3(init_badger_trap, const char __user**, process_name, unsigned lo
 		{
 			if(i<num_procs)
 			{
-				ret = kstrtoul(process_name[i],10,&pid);
+				ret = kstrtoul(process_name_k[i],10,&pid);
 				if(ret == 0)
 				{
 					tsk = find_task_by_vpid(pid);
@@ -136,6 +149,42 @@ inline int is_pmd_reserved(pmd_t pmd)
                 return 0;
 }
 
+void init_tlb_sim(struct mm_struct *mm) {
+    int i;
+    tlb_sim_t *s;
+    if (!mm) {
+        printk("mm null\n");
+        return;
+    }
+    s = kcalloc(1, sizeof(tlb_sim_t), GFP_KERNEL);
+    if (!s) {
+        printk("kcalloc failed\n");
+        return;
+    }
+    s->mm = mm;
+    s->set_bits = tlb_set_bits;
+    s->entries_per_set = tlb_entries_per_set;
+    s->huge_set_bits = hugetlb_set_bits;
+    s->huge_entries_per_set = hugetlb_entries_per_set;
+    s->sets = kmalloc(sizeof(*s->sets) * 1 << tlb_set_bits, GFP_KERNEL);
+    if (!s->sets) {
+        printk("kcalloc2 failed\n");
+        return;
+    }
+    for (i = 0; i < 1 << tlb_set_bits; i++) {
+        s->sets[i] = kcalloc(tlb_entries_per_set, sizeof(*s->sets[i]), GFP_KERNEL);
+    }
+    s->hugesets = kmalloc(sizeof(*s->hugesets) * 1 << hugetlb_set_bits, GFP_KERNEL);
+    if (!s->hugesets) {
+        printk("kcalloc3 failed\n");
+        return;
+    }
+    for (i = 0; i < 1 << hugetlb_set_bits; i++) {
+        s->hugesets[i] = kcalloc(hugetlb_entries_per_set, sizeof(*s->hugesets[i]), GFP_KERNEL);
+    }
+    mm->tlb_sim = s;
+}
+
 /*
  * This function walks the page table of the process being marked for badger trap
  * This helps in finding all the PTEs that are to be marked as reserved. This is 
@@ -157,8 +206,9 @@ void badger_trap_init(struct mm_struct *mm)
 	unsigned long i,j,k,l;
 	unsigned long user = 0;
 	unsigned long mask = _PAGE_USER | _PAGE_PRESENT;
-	struct vm_area_struct *vma;
+	struct vm_area_struct *vma = 0;
 	pgd_t *base = mm->pgd;
+    init_tlb_sim(mm);
 	for(i=0; i<PTRS_PER_PGD; i++)
 	{
 		pgd = base + i;
@@ -210,4 +260,108 @@ void badger_trap_init(struct mm_struct *mm)
 			}
 		}
 	}
+}
+#define PAGE_4K(a) ((a) >> 12)
+#define PAGE_2M(a) ((a) >> 21)
+#define SET(a,n) (~(-1 << (n)) & (a))
+#define TAG(a,n) ((a) >> (n))
+
+/*
+ * If addr == 0 flush the whole simulated tlb, else flush that page
+ */
+void sim_tlb_flush(struct mm_struct *mm, unsigned long addr) {
+    tlb_sim_t *s;
+    int i, j;
+    if (mm && mm->tlb_sim) {
+        s = mm->tlb_sim;
+        if (s->ignore_flush) return;
+        printk("flushing simulated tlb at %lx\n", addr);
+        for (i = 0; i < 1 << s->set_bits; i++) {
+            if (s->sets && s->sets[i]) {
+                for (j = 0; j < s->entries_per_set; j++) {
+                    if (s->sets[i][j].address == PAGE_4K(addr) || addr == 0){
+                        s->sets[i][j].present = 0;
+                    }
+                }
+            }
+        }
+        for (i = 0; i < 1 << s->huge_set_bits; i++) {
+            if (s->hugesets && s->hugesets[i]){
+                for (j = 0; j < s->huge_entries_per_set; j++) {
+                    if (s->hugesets[i][j].address == PAGE_2M(addr) || addr == 0){
+                        s->hugesets[i][j].present = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+int tlb_replace(unsigned long addr, tlb_entry_t *set,
+                            int entries_per_set, struct mm_struct *mm, int page_size) {
+    int i;
+    int invalid_entry = -1, unused_entry = -1;
+    unsigned long replace_addr;
+    for (i = 0; i < entries_per_set; i++) {
+        // If it's already in the tlb just set the used bit and return
+        if (set[i].present && set[i].address == addr) {
+            set[i].used = 1;
+            return 0;
+        }
+        // Keep track of the best replacement candidate
+        if (!set[i].present) invalid_entry = i;
+        else if (!set[i].used) unused_entry = i;
+    }
+
+    // Need to replace a valid entry
+    if (invalid_entry < 0) {
+        if (unused_entry >= 0) {
+            replace_addr = set[unused_entry].address << page_size;
+            printk("flushing tlb at %lx\n", replace_addr);
+            flush_tlb_mm_range(mm, replace_addr, replace_addr + (1 << page_size), 0);
+            invalid_entry = unused_entry;
+        } else {
+            // Everything's recently used, reset bits and evict last addr
+            for (i = 0; i < entries_per_set; i++) set[i].used = 0;
+            printk("flushing whole tlb\n");
+            flush_tlb_mm(mm);
+            replace_addr = set[entries_per_set - 1].address;
+            invalid_entry = entries_per_set - 1;
+        }
+    }
+
+    if (invalid_entry >= 0) {
+        set[invalid_entry].present = 1;
+        set[invalid_entry].used = 1;
+        set[invalid_entry].address = addr;
+        set[invalid_entry].obv = 0; // TODO use real obv
+    }
+    return 1;
+}
+
+void tlb_miss(tlb_sim_t *sim, unsigned long addr, int huge) {
+    tlb_entry_t *set;
+    int miss;
+    if (huge) {
+        addr = PAGE_2M(addr);
+        set = sim->hugesets[SET(addr, sim->huge_set_bits)];
+        sim->ignore_flush = 1;
+        miss = tlb_replace(addr, set, sim->huge_entries_per_set, sim->mm, 21);
+        sim->ignore_flush = 0;
+
+        if (miss) {
+            sim->total_dtlb_misses++;
+            sim->total_dtlb_hugetlb_misses++;
+        } else printk("huge miss hit in simulated tlb\n");
+    } else {
+        addr = PAGE_4K(addr);
+        set = sim->sets[SET(addr, sim->set_bits)];
+        sim->ignore_flush = 1;
+        miss = tlb_replace(addr, set, sim->entries_per_set, sim->mm, 12);
+        sim->ignore_flush = 0;
+        if (miss) {
+            sim->total_dtlb_misses++;
+            sim->total_dtlb_4k_misses++;
+        } else printk("4k miss hit in simulated tlb\n");
+    }
 }

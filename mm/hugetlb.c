@@ -23,6 +23,7 @@
 #include <linux/swapops.h>
 #include <linux/page-isolation.h>
 #include <linux/jhash.h>
+#include <linux/badger_trap.h>
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
@@ -3665,8 +3666,7 @@ static int hugetlb_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	current->total_dtlb_hugetlb_misses++;
-	current->total_dtlb_misses++;
+	tlb_miss(mm->tlb_sim, address, 1);
 
 	*page_table = pte_mkreserve(*page_table);
 	return 0;

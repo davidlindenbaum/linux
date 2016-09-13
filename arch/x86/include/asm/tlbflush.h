@@ -3,6 +3,7 @@
 
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/badger_trap.h>
 
 #include <asm/processor.h>
 #include <asm/cpufeature.h>
@@ -135,6 +136,7 @@ static inline void cr4_set_bits_and_update_boot(unsigned long mask)
 
 static inline void __native_flush_tlb(void)
 {
+	sim_tlb_flush(current->active_mm, 0);
 	native_write_cr3(native_read_cr3());
 }
 
@@ -176,6 +178,8 @@ static inline void __native_flush_tlb_global(void)
 
 static inline void __native_flush_tlb_single(unsigned long addr)
 {
+
+	sim_tlb_flush(current->active_mm, addr);
 	asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
 }
 
