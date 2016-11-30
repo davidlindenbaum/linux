@@ -899,6 +899,6 @@ asmlinkage long sys_copy_file_range(int fd_in, loff_t __user *off_in,
 asmlinkage long sys_mlock2(unsigned long start, size_t len, int flags);
 
 asmlinkage long sys_init_badger_trap(const char __user** process_name, unsigned long num_procs, int options);
-asmlinkage long sys_set_tlb_sim_params(int set_bits, int entries_per_set, int huge_set_bits, int huge_entries_per_set);
+asmlinkage long sys_set_tlb_sim_params(int set_bits, int entries_per_set, int huge_set_bits, int huge_entries_per_set, int overlays);
 
 #endif

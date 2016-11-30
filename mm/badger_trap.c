@@ -7,23 +7,25 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
-int tlb_set_bits = 2;
-int tlb_entries_per_set = 16;
-int hugetlb_set_bits = 2;
-int hugetlb_entries_per_set = 16;
+int tlb_set_bits = 3;
+int tlb_entries_per_set = 4;
+int hugetlb_set_bits = 3;
+int hugetlb_entries_per_set = 4;
+int use_overlays = 1;
 char badger_trap_process[CONFIG_NR_CPUS][MAX_NAME_LEN] = {0};
 
-SYSCALL_DEFINE4(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set)
+SYSCALL_DEFINE5(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set, int, overlays)
 {
     tlb_set_bits = set_bits;
     tlb_entries_per_set = entries_per_set;
     hugetlb_set_bits = huge_set_bits;
     hugetlb_entries_per_set = huge_entries_per_set;
+    use_overlays = overlays;
     return 0;
 }
 
 /*
- * This syscall is generic way of setting up badger trap. 
+ * This syscall is generic way of setting up badger trap.
  * There are three options to start badger trap.
  * (1) 	option > 0: provide all process names with number of processes.
  * 	This will mark the process names for badger trap to start when any
@@ -31,7 +33,7 @@ SYSCALL_DEFINE4(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, hu
  *
  * (2) 	option == 0: starts badger trap for the process calling the syscall itself.
  *  	This requires binary to be updated for the workload to call badger trap. This
- *  	option is useful when you want to skip the warmup phase of the program. You can 
+ *  	option is useful when you want to skip the warmup phase of the program. You can
  *  	introduce the syscall in the program to invoke badger trap after that phase.
  *
  * (3) 	option < 0: provide all pid with number of processes. This will start badger
@@ -40,9 +42,9 @@ SYSCALL_DEFINE4(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, hu
  *  Note: 	(1) will allow all the child processes to be marked for badger trap when
  *  		forked from a badger trap process.
 
- *		(2) and (3) will not mark the already spawned child processes for badger 
- *		trap when you mark the parent process for badger trap on the fly. But (2) and (3) 
- *		will mark all child spwaned from the parent process adter being marked for badger trap. 
+ *		(2) and (3) will not mark the already spawned child processes for badger
+ *		trap when you mark the parent process for badger trap on the fly. But (2) and (3)
+ *		will mark all child spwaned from the parent process adter being marked for badger trap.
  */
 SYSCALL_DEFINE3(init_badger_trap, const char __user**, process_name, unsigned long, num_procs, int, option)
 {
@@ -149,7 +151,7 @@ inline int is_pmd_reserved(pmd_t pmd)
                 return 0;
 }
 
-void init_tlb_sim(struct mm_struct *mm) {
+void init_tlb_sim(struct mm_struct *mm, int keep_info) {
     int i;
     tlb_sim_t *s;
     if (!mm) {
@@ -182,14 +184,28 @@ void init_tlb_sim(struct mm_struct *mm) {
     for (i = 0; i < 1 << hugetlb_set_bits; i++) {
         s->hugesets[i] = kcalloc(hugetlb_entries_per_set, sizeof(*s->hugesets[i]), GFP_KERNEL);
     }
+    s->huge_pte_info = NULL;
+    if (keep_info) s->huge_pte_info = mm->tlb_sim->huge_pte_info;
+    /*if (keep_info) {
+      i = 0;
+      struct sim_pte_info *info = mm->tlb_sim->huge_pte_info;
+      while (info) {
+        if (i++ > 1000) break;
+        if (info->virt_addr == addr) {
+          return info;
+        }
+        info = info->next;
+      }
+      printk("did %d iterations\n", i);
+    }*/
     mm->tlb_sim = s;
 }
 
 /*
  * This function walks the page table of the process being marked for badger trap
- * This helps in finding all the PTEs that are to be marked as reserved. This is 
+ * This helps in finding all the PTEs that are to be marked as reserved. This is
  * espicially useful to start badger trap on the fly using (2) and (3). If we do not
- * call this function, when starting badger trap for any process, we may miss some TLB 
+ * call this function, when starting badger trap for any process, we may miss some TLB
  * misses from being tracked which may not be desierable.
  *
  * Note: This function takes care of transparent hugepages and hugepages in general.
@@ -208,7 +224,7 @@ void badger_trap_init(struct mm_struct *mm)
 	unsigned long mask = _PAGE_USER | _PAGE_PRESENT;
 	struct vm_area_struct *vma = 0;
 	pgd_t *base = mm->pgd;
-    init_tlb_sim(mm);
+    init_tlb_sim(mm, 0);
 	for(i=0; i<PTRS_PER_PGD; i++)
 	{
 		pgd = base + i;
@@ -275,7 +291,7 @@ void sim_tlb_flush(struct mm_struct *mm, unsigned long addr) {
     if (mm && mm->tlb_sim) {
         s = mm->tlb_sim;
         if (s->ignore_flush) return;
-        printk("flushing simulated tlb at %lx\n", addr);
+        //printk("flushing simulated tlb at %lx\n", addr);
         for (i = 0; i < 1 << s->set_bits; i++) {
             if (s->sets && s->sets[i]) {
                 for (j = 0; j < s->entries_per_set; j++) {
@@ -317,13 +333,13 @@ int tlb_replace(unsigned long addr, tlb_entry_t *set,
     if (invalid_entry < 0) {
         if (unused_entry >= 0) {
             replace_addr = set[unused_entry].address << page_size;
-            printk("flushing tlb at %lx\n", replace_addr);
+            //printk("flushing tlb at %lx\n", replace_addr);
             flush_tlb_mm_range(mm, replace_addr, replace_addr + (1 << page_size), 0);
             invalid_entry = unused_entry;
         } else {
             // Everything's recently used, reset bits and evict last addr
             for (i = 0; i < entries_per_set; i++) set[i].used = 0;
-            printk("flushing whole tlb\n");
+            //printk("flushing whole tlb\n");
             flush_tlb_mm(mm);
             replace_addr = set[entries_per_set - 1].address;
             invalid_entry = entries_per_set - 1;
@@ -334,34 +350,111 @@ int tlb_replace(unsigned long addr, tlb_entry_t *set,
         set[invalid_entry].present = 1;
         set[invalid_entry].used = 1;
         set[invalid_entry].address = addr;
-        set[invalid_entry].obv = 0; // TODO use real obv
     }
     return 1;
 }
 
-void tlb_miss(tlb_sim_t *sim, unsigned long addr, int huge) {
+struct sim_pte_info *get_pte(tlb_sim_t *sim, unsigned long addr) {
+  struct sim_pte_info *info = sim->huge_pte_info;
+  while (info) {
+    if (info->virt_addr == addr) {
+      printk("found known page %lx\n", addr << 21);
+      return info;
+    }
+    info = info->next;
+  }
+  return 0;
+}
+
+int is_in_overlay(unsigned long addr, uint8_t obv[64]) {
+    unsigned int ind = (addr >> 12) % (1 << 9);
+    return (obv[ind / 8] >> (ind % 8)) % 2;
+}
+
+void set_overlay(unsigned long addr, struct sim_pte_info *info) {
+    unsigned int ind = (addr >> 12) % (1 << 9);
+    info->obv[ind / 8] |= (1 << (ind % 8));
+}
+
+void tlb_4k_miss(struct mm_struct *mm, unsigned long addr, int write) {
     tlb_entry_t *set;
     int miss;
-    if (huge) {
-        addr = PAGE_2M(addr);
-        set = sim->hugesets[SET(addr, sim->huge_set_bits)];
-        sim->ignore_flush = 1;
-        miss = tlb_replace(addr, set, sim->huge_entries_per_set, sim->mm, 21);
-        sim->ignore_flush = 0;
+    unsigned long addr4k = PAGE_4K(addr);
+    tlb_sim_t *sim = mm->tlb_sim;
+    set = sim->sets[SET(addr4k, sim->set_bits)];
+    sim->ignore_flush = 1;
+    miss = tlb_replace(addr4k, set, sim->entries_per_set, sim->mm, 12);
+    sim->ignore_flush = 0;
+    if (miss) {
+        sim->total_dtlb_misses++;
+        sim->total_dtlb_4k_misses++;
+        printk("4k miss %lx\n", addr);
+    }
+}
 
-        if (miss) {
-            sim->total_dtlb_misses++;
-            sim->total_dtlb_hugetlb_misses++;
-        } else printk("huge miss hit in simulated tlb\n");
+void tlb_2m_miss(struct mm_struct *mm, unsigned long addr, int write) {
+    tlb_entry_t *set;
+    int miss;
+    unsigned long addr2m = PAGE_2M(addr);
+    tlb_sim_t *sim = mm->tlb_sim;
+    set = sim->hugesets[SET(addr2m, sim->huge_set_bits)];
+    sim->ignore_flush = 1;
+    miss = tlb_replace(addr2m, set, sim->huge_entries_per_set, sim->mm, 21);
+    sim->ignore_flush = 0;
+
+    if (miss) {
+        sim->total_dtlb_misses++;
+        sim->total_dtlb_hugetlb_misses++;
+        printk("huge miss %lx\n", addr);
+    }
+    struct sim_pte_info *info = get_pte(sim, addr2m);
+    if (!info) {
+        if (use_overlays) {
+            printk("adding new known page %lx\n", addr2m << 21);
+            info = kcalloc(1, sizeof(*info), GFP_KERNEL);
+            info->virt_addr = addr2m;
+            info->next = sim->huge_pte_info;
+            sim->huge_pte_info = info;
+        }
     } else {
-        addr = PAGE_4K(addr);
-        set = sim->sets[SET(addr, sim->set_bits)];
-        sim->ignore_flush = 1;
-        miss = tlb_replace(addr, set, sim->entries_per_set, sim->mm, 12);
-        sim->ignore_flush = 0;
-        if (miss) {
-            sim->total_dtlb_misses++;
-            sim->total_dtlb_4k_misses++;
-        } else printk("4k miss hit in simulated tlb\n");
+        if (is_in_overlay(addr, info->obv)) {
+            printk("%lx is overlay page, going to 4k tlb\n", addr);
+            tlb_4k_miss(mm, addr, write);
+        } else {
+            printk("a flushing tlb at %lx\n", addr2m << 21);
+            sim->ignore_flush = 1;
+            flush_tlb_mm_range(mm, addr2m << 21, (addr2m + 1) << 21, 0);
+            sim->ignore_flush = 0;
+        }
+    }
+}
+
+void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write) {
+    tlb_sim_t *sim = mm->tlb_sim;
+    if (huge) {
+        tlb_2m_miss(mm, addr, write);
+    } else {
+        struct sim_pte_info *info = get_pte(sim, PAGE_2M(addr));
+        if (info) {
+            printk("%lx is in known hugepage, going to 2m tlb\n", addr);
+            if(write) set_overlay(addr, info);
+            // Wheter or not this page is in the overlay, the superpage needs to be in the tlb
+            tlb_2m_miss(mm, addr, write);
+        } else {
+          tlb_4k_miss(mm, addr, write);
+        }
+    }
+}
+
+void sim_cow(struct mm_struct *mm, unsigned long addr) {
+unsigned long addr2m = PAGE_2M(addr);
+    struct sim_pte_info *info = get_pte(mm->tlb_sim, addr2m);
+    if (info) {
+        printk("cow on %lx, known page\n", addr);
+        set_overlay(addr, info);
+        printk("b flushing tlb at %lx\n", addr2m << 21);
+        mm->tlb_sim->ignore_flush = 1;
+        flush_tlb_mm_range(mm, addr2m << 21, (addr2m + 1) << 21, 0);
+        mm->tlb_sim->ignore_flush = 0;
     }
 }

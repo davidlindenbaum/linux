@@ -16,11 +16,18 @@ int is_pmd_reserved(pmd_t pmd);
 void badger_trap_init(struct mm_struct *mm);
 
 
+struct sim_pte_info {
+    long virt_addr;
+    long phys_addr;
+    int cow;
+    uint8_t obv[64];
+    struct sim_pte_info *next;
+};
+
 typedef struct tlb_entry {
     int present;
     int used;
     long address;
-    long obv;
 } tlb_entry_t;
 
 typedef struct tlb_sim {
@@ -35,11 +42,13 @@ typedef struct tlb_sim {
     unsigned long total_dtlb_misses;
     unsigned long total_dtlb_hugetlb_misses;
     int ignore_flush;
+    struct sim_pte_info *huge_pte_info;
 } tlb_sim_t;
 
-void init_tlb_sim(struct mm_struct *mm);
-void tlb_miss(tlb_sim_t *sim, unsigned long addr, int huge);
+void init_tlb_sim(struct mm_struct *mm, int keep_info);
+void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write);
 void sim_tlb_flush(struct mm_struct *mm, unsigned long addr);
+void sim_cow(struct mm_struct *mm, unsigned long addr);
 
 extern int tlb_set_bits;
 extern int tlb_entries_per_set;

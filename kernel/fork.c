@@ -993,7 +993,7 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 		goto fail_nomem;
 
 good_mm:
-	if (mm->badger_trap_en) init_tlb_sim(mm);
+	if (mm->badger_trap_en) init_tlb_sim(mm, 1);
 	tsk->mm = mm;
 	tsk->active_mm = mm;
 	return 0;

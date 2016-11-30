@@ -911,14 +911,14 @@ static bool set_huge_zero_page(pgtable_t pgtable, struct mm_struct *mm,
 	entry = pmd_mkhuge(entry);
 	if (pgtable)
 		pgtable_trans_huge_deposit(mm, pmd, pgtable);
-	/* Make the page table entry as reserved for TLB miss tracking 
+	/* Make the page table entry as reserved for TLB miss tracking
 	 * No need to worry for zero page with instruction faults.
 	 * Instruction faults will never reach here.
 	 */
 	if(mm && (mm->badger_trap_en==1))
 	{
 		entry = pmd_mkreserve(entry);
-	}		
+	}
 	set_pmd_at(mm, haddr, pmd, entry);
 	atomic_long_inc(&mm->nr_ptes);
 	return true;
@@ -1407,13 +1407,13 @@ alloc:
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
 		pmdp_huge_clear_flush_notify(vma, haddr, pmd);
 		page_add_new_anon_rmap(new_page, vma, haddr, true);
-		
+
 		/* Make the page table entry as reserved for TLB miss tracking */
 		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
 		{
 			entry = pmd_mkreserve(entry);
 		}
-		
+
 		mem_cgroup_commit_charge(new_page, memcg, false, true);
 		lru_cache_add_active_or_unevictable(new_page, vma);
 		set_pmd_at(mm, haddr, pmd, entry);
@@ -2393,6 +2393,9 @@ static void collapse_huge_page(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
 				   int node)
 {
+	if (mm->badger_trap_en) {
+		printk("Huge page collapse\n");
+	}
 	pmd_t *pmd, _pmd;
 	pte_t *pte;
 	pgtable_t pgtable;
@@ -2903,6 +2906,9 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		unsigned long haddr, bool freeze)
 {
+	if (vma->vm_mm->badger_trap_en) {
+		printk("Huge page split\n");
+	}
 	struct mm_struct *mm = vma->vm_mm;
 	struct page *page;
 	pgtable_t pgtable;
@@ -2922,8 +2928,14 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		pmd_t _pmd = pmdp_huge_clear_flush_notify(vma, haddr, pmd);
 		if (is_huge_zero_pmd(_pmd))
 			put_huge_zero_page();
+		if (mm && mm->badger_trap_en) {
+			printk("split dax vma\n");
+		}
 		return;
 	} else if (is_huge_zero_pmd(*pmd)) {
+		if (mm && mm->badger_trap_en) {
+			printk("split zero pmd\n");
+		}
 		return __split_huge_zero_page_pmd(vma, haddr, pmd);
 	}
 
@@ -2959,6 +2971,9 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		}
 		if (dirty)
 			SetPageDirty(page + i);
+		if (mm && mm->badger_trap_en) {
+			entry = pte_mkreserve(entry);
+		}
 		pte = pte_offset_map(&_pmd, addr);
 		BUG_ON(!pte_none(*pte));
 		set_pte_at(mm, addr, pte, entry);

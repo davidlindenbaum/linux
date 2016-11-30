@@ -2329,6 +2329,9 @@ static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	__releases(ptl)
 {
 	struct page *old_page;
+	if(mm && mm->badger_trap_en) {
+		sim_cow(mm, address);
+	}
 
 	old_page = vm_normal_page(vma, address, orig_pte);
 	if (!old_page) {
@@ -3081,6 +3084,10 @@ static int do_cow_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		}
 		goto uncharge_out;
 	}
+
+	if(mm && mm->badger_trap_en) {
+		sim_cow(mm, address);
+	}
 	do_set_pte(mm, vma, address, new_page, pte, true, true, flags);
 	mem_cgroup_commit_charge(new_page, memcg, false, false);
 	lru_cache_add_active_or_unevictable(new_page, vma);
@@ -3360,7 +3367,7 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm->tlb_sim, address, 0);
+	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE);
 
 	*page_table = pte_mkreserve(*page_table);
 	pte_unmap_unlock(page_table, ptl);
@@ -3396,7 +3403,7 @@ static int handle_pte_fault(struct mm_struct *mm,
 	if(mm && mm->badger_trap_en && (flags & FAULT_FLAG_INSTRUCTION))
 	{
 		if(is_pte_reserved(*pte))
-			*pte = pte_unreserve(*pte);	
+			*pte = pte_unreserve(*pte);
 	}
 
 	/* We need to figure out if the page fault is a fake page fault or not.
@@ -3405,7 +3412,7 @@ static int handle_pte_fault(struct mm_struct *mm,
 	 * Our technique cannot not handle instruction page fault yet.
 	 *
 	 * We can have two cases when we have a fake page fault:
-	 * 1. We have taken a fake page fault on a COW page. A 
+	 * 1. We have taken a fake page fault on a COW page. A
 	 * 	fake page fault on a COW page if for reading only
 	 * 	has to be considered a normal fake page fault. But
 	 * 	for writing purposes need to be handled correctly.
@@ -3524,7 +3531,7 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm->tlb_sim, address, 1);
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE);
 
 	*page_table = pmd_mkreserve(*page_table);
 	return 0;

@@ -3666,7 +3666,7 @@ static int hugetlb_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm->tlb_sim, address, 1);
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE);
 
 	*page_table = pte_mkreserve(*page_table);
 	return 0;
