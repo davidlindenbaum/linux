@@ -3367,7 +3367,7 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE);
+	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, page_table->pte);
 
 	*page_table = pte_mkreserve(*page_table);
 	pte_unmap_unlock(page_table, ptl);
@@ -3531,7 +3531,7 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 		return VM_FAULT_SIGBUS;
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE);
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, page_table->pmd);
 
 	*page_table = pmd_mkreserve(*page_table);
 	return 0;

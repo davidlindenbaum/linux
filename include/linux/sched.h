@@ -1849,10 +1849,6 @@ struct task_struct {
 	unsigned long	task_state_change;
 #endif
 	int pagefault_disabled;
-
-	unsigned long total_dtlb_misses;
-	unsigned long total_dtlb_4k_misses;
-	unsigned long total_dtlb_hugetlb_misses;
 #ifdef CONFIG_MMU
 	struct task_struct *oom_reaper_list;
 #endif

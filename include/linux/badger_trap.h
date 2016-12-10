@@ -30,23 +30,28 @@ typedef struct tlb_entry {
     long address;
 } tlb_entry_t;
 
-typedef struct tlb_sim {
-    struct mm_struct *mm;
+typedef struct tlb_sim_data {
     int set_bits;
     int entries_per_set;
-    int huge_set_bits;
-    int huge_entries_per_set;
     tlb_entry_t **sets;
-    tlb_entry_t **hugesets;
+} tlb_sim_data_t;
+
+typedef struct tlb_sim {
+    struct mm_struct *mm;
+    tlb_sim_data_t tlb_4k;
+    tlb_sim_data_t tlb_2m;
+    tlb_sim_data_t tlb_4k_overlay;
+    tlb_sim_data_t tlb_2m_overlay;
     unsigned long total_dtlb_4k_misses;
-    unsigned long total_dtlb_misses;
     unsigned long total_dtlb_hugetlb_misses;
+    unsigned long total_dtlb_4k_misses_overlay;
+    unsigned long total_dtlb_hugetlb_misses_overlay;
     int ignore_flush;
     struct sim_pte_info *huge_pte_info;
 } tlb_sim_t;
 
 void init_tlb_sim(struct mm_struct *mm, int keep_info);
-void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write);
+void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, unsigned long page_table);
 void sim_tlb_flush(struct mm_struct *mm, unsigned long addr);
 void sim_cow(struct mm_struct *mm, unsigned long addr);
 
@@ -54,6 +59,7 @@ extern int tlb_set_bits;
 extern int tlb_entries_per_set;
 extern int hugetlb_set_bits;
 extern int hugetlb_entries_per_set;
+extern int print_tlbsim_debug;
 
 
 #endif /* _LINUX_BADGER_TRAP_H */

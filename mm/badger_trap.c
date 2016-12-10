@@ -11,16 +11,16 @@ int tlb_set_bits = 3;
 int tlb_entries_per_set = 4;
 int hugetlb_set_bits = 3;
 int hugetlb_entries_per_set = 4;
-int use_overlays = 1;
 char badger_trap_process[CONFIG_NR_CPUS][MAX_NAME_LEN] = {0};
+int print_tlbsim_debug = 0;
 
-SYSCALL_DEFINE5(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set, int, overlays)
+SYSCALL_DEFINE5(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set, int, print_verbose)
 {
     tlb_set_bits = set_bits;
     tlb_entries_per_set = entries_per_set;
     hugetlb_set_bits = huge_set_bits;
     hugetlb_entries_per_set = huge_entries_per_set;
-    use_overlays = overlays;
+    print_tlbsim_debug = print_verbose;
     return 0;
 }
 
@@ -48,53 +48,47 @@ SYSCALL_DEFINE5(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, hu
  */
 SYSCALL_DEFINE3(init_badger_trap, const char __user**, process_name, unsigned long, num_procs, int, option)
 {
-	unsigned int i;
-	char *temp;
-	unsigned long ret=0;
-	char proc[MAX_NAME_LEN];
-	struct task_struct * tsk;
-	unsigned long pid;
-	char *process_name_k[num_procs];
-	copy_from_user(process_name_k, process_name, num_procs * sizeof(*process_name));
+  	unsigned int i;
+  	char *temp;
+  	unsigned long ret=0;
+  	char proc[MAX_NAME_LEN];
+  	struct task_struct * tsk;
+  	unsigned long pid;
+  	char *process_name_k[num_procs];
+  	copy_from_user(process_name_k, process_name, num_procs * sizeof(*process_name));
 
-	if(option > 0)
-	{
-		for(i=0; i<CONFIG_NR_CPUS; i++)
-		{
-			if(i<num_procs) {
-				ret = strncpy_from_user(proc, process_name_k[i], MAX_NAME_LEN);
+  	if (option > 0) {
+    		for (i=0; i<CONFIG_NR_CPUS; i++) {
+    			  if (i<num_procs) {
+    				    ret = strncpy_from_user(proc, process_name_k[i], MAX_NAME_LEN);
             } else {
-				temp = strncpy(proc,"",MAX_NAME_LEN);
+    				    temp = strncpy(proc, "", MAX_NAME_LEN);
             }
-			temp = strncpy(badger_trap_process[i], proc, MAX_NAME_LEN-1);
-		}
-	}
+    			  temp = strncpy(badger_trap_process[i], proc, MAX_NAME_LEN - 1);
+    		}
+  	}
 
-	// All other inputs ignored
-	if(option == 0)
-	{
-		current->mm->badger_trap_en = 1;
-		badger_trap_init(current->mm);
-	}
+  	// All other inputs ignored
+  	if (option == 0) {
+    		current->mm->badger_trap_en = 1;
+    		badger_trap_init(current->mm);
+  	}
 
-	if(option < 0)
-	{
-		for(i=0; i<CONFIG_NR_CPUS; i++)
-		{
-			if(i<num_procs)
-			{
-				ret = kstrtoul(process_name_k[i],10,&pid);
-				if(ret == 0)
-				{
-					tsk = find_task_by_vpid(pid);
-					tsk->mm->badger_trap_en = 1;
-					badger_trap_init(tsk->mm);
-				}
-			}
-		}
-	}
+  	if (option < 0) {
+    		for (i=0; i<CONFIG_NR_CPUS; i++) {
+      			if (i<num_procs) {
+                ret = strncpy_from_user(proc, process_name_k[i], MAX_NAME_LEN);
+        				ret = kstrtoul(proc, 10, &pid);
+        				if (ret == 0) {
+          					tsk = find_task_by_vpid(pid);
+          					tsk->mm->badger_trap_en = 1;
+          					badger_trap_init(tsk->mm);
+        				}
+      			}
+    		}
+  	}
 
-	return 0;
+  	return 0;
 }
 
 /*
@@ -103,13 +97,12 @@ SYSCALL_DEFINE3(init_badger_trap, const char __user**, process_name, unsigned lo
  */
 int is_badger_trap_process(const char* proc_name)
 {
-	unsigned int i;
-	for(i=0; i<CONFIG_NR_CPUS; i++)
-	{
-		if(!strncmp(proc_name,badger_trap_process[i],MAX_NAME_LEN))
-			return 1;
-	}
-	return 0;
+  	unsigned int i;
+  	for (i=0; i<CONFIG_NR_CPUS; i++) {
+    		if(!strncmp(proc_name,badger_trap_process[i],MAX_NAME_LEN))
+    			 return 1;
+  	}
+  	return 0;
 }
 
 /*
@@ -117,87 +110,87 @@ int is_badger_trap_process(const char* proc_name)
  */
 inline pte_t pte_mkreserve(pte_t pte)
 {
-        return pte_set_flags(pte, PTE_RESERVED_MASK);
+    return pte_set_flags(pte, PTE_RESERVED_MASK);
 }
 
 inline pte_t pte_unreserve(pte_t pte)
 {
-        return pte_clear_flags(pte, PTE_RESERVED_MASK);
+    return pte_clear_flags(pte, PTE_RESERVED_MASK);
 }
 
 inline int is_pte_reserved(pte_t pte)
 {
-        if(native_pte_val(pte) & PTE_RESERVED_MASK)
-                return 1;
-        else
-                return 0;
+    if(native_pte_val(pte) & PTE_RESERVED_MASK)
+        return 1;
+    else
+        return 0;
 }
 
 inline pmd_t pmd_mkreserve(pmd_t pmd)
 {
-        return pmd_set_flags(pmd, PTE_RESERVED_MASK);
+    return pmd_set_flags(pmd, PTE_RESERVED_MASK);
 }
 
 inline pmd_t pmd_unreserve(pmd_t pmd)
 {
-        return pmd_clear_flags(pmd, PTE_RESERVED_MASK);
+    return pmd_clear_flags(pmd, PTE_RESERVED_MASK);
 }
 
 inline int is_pmd_reserved(pmd_t pmd)
 {
-        if(native_pmd_val(pmd) & PTE_RESERVED_MASK)
-                return 1;
-        else
-                return 0;
+    if(native_pmd_val(pmd) & PTE_RESERVED_MASK)
+        return 1;
+    else
+        return 0;
 }
 
-void init_tlb_sim(struct mm_struct *mm, int keep_info) {
+void init_tlb_data(tlb_sim_data_t *data, int set_bits, int entries_per_set)
+{
     int i;
+    data->set_bits = set_bits;
+    data->entries_per_set = entries_per_set;
+    data->sets = kmalloc(sizeof(*data->sets) * 1 << set_bits, GFP_KERNEL);
+    if (!data->sets) {
+        if (print_tlbsim_debug) printk("kcalloc2 failed\n");
+        return;
+    }
+    for (i = 0; i < 1 << tlb_set_bits; i++) {
+        data->sets[i] = kcalloc(entries_per_set, sizeof(*data->sets[i]), GFP_KERNEL);
+    }
+}
+
+void init_tlb_sim(struct mm_struct *mm, int keep_info)
+{
     tlb_sim_t *s;
     if (!mm) {
-        printk("mm null\n");
+        if (print_tlbsim_debug) printk("mm null\n");
         return;
     }
     s = kcalloc(1, sizeof(tlb_sim_t), GFP_KERNEL);
     if (!s) {
-        printk("kcalloc failed\n");
+        if (print_tlbsim_debug) printk("kcalloc failed\n");
         return;
     }
     s->mm = mm;
-    s->set_bits = tlb_set_bits;
-    s->entries_per_set = tlb_entries_per_set;
-    s->huge_set_bits = hugetlb_set_bits;
-    s->huge_entries_per_set = hugetlb_entries_per_set;
-    s->sets = kmalloc(sizeof(*s->sets) * 1 << tlb_set_bits, GFP_KERNEL);
-    if (!s->sets) {
-        printk("kcalloc2 failed\n");
-        return;
-    }
-    for (i = 0; i < 1 << tlb_set_bits; i++) {
-        s->sets[i] = kcalloc(tlb_entries_per_set, sizeof(*s->sets[i]), GFP_KERNEL);
-    }
-    s->hugesets = kmalloc(sizeof(*s->hugesets) * 1 << hugetlb_set_bits, GFP_KERNEL);
-    if (!s->hugesets) {
-        printk("kcalloc3 failed\n");
-        return;
-    }
-    for (i = 0; i < 1 << hugetlb_set_bits; i++) {
-        s->hugesets[i] = kcalloc(hugetlb_entries_per_set, sizeof(*s->hugesets[i]), GFP_KERNEL);
-    }
+
+    init_tlb_data(&s->tlb_4k, tlb_set_bits, tlb_entries_per_set);
+    init_tlb_data(&s->tlb_2m, hugetlb_set_bits, hugetlb_entries_per_set);
+    init_tlb_data(&s->tlb_4k_overlay, tlb_set_bits, tlb_entries_per_set);
+    init_tlb_data(&s->tlb_2m_overlay, hugetlb_set_bits, hugetlb_entries_per_set);
+
     s->huge_pte_info = NULL;
-    if (keep_info) s->huge_pte_info = mm->tlb_sim->huge_pte_info;
-    /*if (keep_info) {
-      i = 0;
-      struct sim_pte_info *info = mm->tlb_sim->huge_pte_info;
-      while (info) {
-        if (i++ > 1000) break;
-        if (info->virt_addr == addr) {
-          return info;
+    //if (keep_info) s->huge_pte_info = mm->tlb_sim->huge_pte_info;
+    if (keep_info) {
+        struct sim_pte_info *info = mm->tlb_sim->huge_pte_info;
+        while (info) {
+            struct sim_pte_info *info2 = kcalloc(1, sizeof(*info2), GFP_KERNEL);
+            *info2 = *info;
+            info2->next = s->huge_pte_info;
+            s->huge_pte_info = info2;
+
+            info = info->next;
         }
-        info = info->next;
-      }
-      printk("did %d iterations\n", i);
-    }*/
+    }
     mm->tlb_sim = s;
 }
 
@@ -224,7 +217,7 @@ void badger_trap_init(struct mm_struct *mm)
 	unsigned long mask = _PAGE_USER | _PAGE_PRESENT;
 	struct vm_area_struct *vma = 0;
 	pgd_t *base = mm->pgd;
-    init_tlb_sim(mm, 0);
+  init_tlb_sim(mm, 0);
 	for(i=0; i<PTRS_PER_PGD; i++)
 	{
 		pgd = base + i;
@@ -277,50 +270,53 @@ void badger_trap_init(struct mm_struct *mm)
 		}
 	}
 }
-#define PAGE_4K(a) ((a) >> 12)
-#define PAGE_2M(a) ((a) >> 21)
+
+#define SHIFT_4K 12
+#define SHIFT_2M 21
 #define SET(a,n) (~(-1 << (n)) & (a))
 #define TAG(a,n) ((a) >> (n))
 
-/*
- * If addr == 0 flush the whole simulated tlb, else flush that page
- */
-void sim_tlb_flush(struct mm_struct *mm, unsigned long addr) {
-    tlb_sim_t *s;
+void _sim_tlb_flush(tlb_sim_data_t *sim, unsigned long addr)
+{
     int i, j;
-    if (mm && mm->tlb_sim) {
-        s = mm->tlb_sim;
-        if (s->ignore_flush) return;
-        //printk("flushing simulated tlb at %lx\n", addr);
-        for (i = 0; i < 1 << s->set_bits; i++) {
-            if (s->sets && s->sets[i]) {
-                for (j = 0; j < s->entries_per_set; j++) {
-                    if (s->sets[i][j].address == PAGE_4K(addr) || addr == 0){
-                        s->sets[i][j].present = 0;
-                    }
-                }
-            }
-        }
-        for (i = 0; i < 1 << s->huge_set_bits; i++) {
-            if (s->hugesets && s->hugesets[i]){
-                for (j = 0; j < s->huge_entries_per_set; j++) {
-                    if (s->hugesets[i][j].address == PAGE_2M(addr) || addr == 0){
-                        s->hugesets[i][j].present = 0;
-                    }
+    for (i = 0; i < 1 << sim->set_bits; i++) {
+        if (sim->sets && sim->sets[i]) {
+            for (j = 0; j < sim->entries_per_set; j++) {
+                if (sim->sets[i][j].address == addr || addr == 0){
+                    sim->sets[i][j].present = 0;
                 }
             }
         }
     }
 }
 
-int tlb_replace(unsigned long addr, tlb_entry_t *set,
-                            int entries_per_set, struct mm_struct *mm, int page_size) {
+/*
+ * If addr == 0 flush the whole simulated tlb, else flush that page
+ */
+void sim_tlb_flush(struct mm_struct *mm, unsigned long addr)
+{
+    tlb_sim_t *s;
+    if (mm && mm->tlb_sim) {
+        s = mm->tlb_sim;
+        if (s->ignore_flush) return;
+        _sim_tlb_flush(&s->tlb_4k, addr >> SHIFT_4K);
+        _sim_tlb_flush(&s->tlb_2m, addr >> SHIFT_2M);
+        _sim_tlb_flush(&s->tlb_4k_overlay, addr >> SHIFT_4K);
+        _sim_tlb_flush(&s->tlb_2m_overlay, addr >> SHIFT_2M);
+    }
+}
+
+int tlb_replace(unsigned long addr, tlb_sim_data_t *data, struct mm_struct *mm, int page_shift)
+{
+    unsigned long addr_trim = addr >> page_shift;
+    tlb_entry_t *set = data->sets[SET(addr_trim, data->set_bits)];
+
     int i;
     int invalid_entry = -1, unused_entry = -1;
     unsigned long replace_addr;
-    for (i = 0; i < entries_per_set; i++) {
+    for (i = 0; i < data->entries_per_set; i++) {
         // If it's already in the tlb just set the used bit and return
-        if (set[i].present && set[i].address == addr) {
+        if (set[i].present && set[i].address == addr_trim) {
             set[i].used = 1;
             return 0;
         }
@@ -332,129 +328,119 @@ int tlb_replace(unsigned long addr, tlb_entry_t *set,
     // Need to replace a valid entry
     if (invalid_entry < 0) {
         if (unused_entry >= 0) {
-            replace_addr = set[unused_entry].address << page_size;
-            //printk("flushing tlb at %lx\n", replace_addr);
-            flush_tlb_mm_range(mm, replace_addr, replace_addr + (1 << page_size), 0);
+            replace_addr = set[unused_entry].address << page_shift;
+            flush_tlb_mm_range(mm, replace_addr, replace_addr + (1 << page_shift), 0);
             invalid_entry = unused_entry;
         } else {
             // Everything's recently used, reset bits and evict last addr
-            for (i = 0; i < entries_per_set; i++) set[i].used = 0;
-            //printk("flushing whole tlb\n");
+            for (i = 0; i < data->entries_per_set; i++) set[i].used = 0;
             flush_tlb_mm(mm);
-            replace_addr = set[entries_per_set - 1].address;
-            invalid_entry = entries_per_set - 1;
+            replace_addr = set[data->entries_per_set - 1].address;
+            invalid_entry = data->entries_per_set - 1;
         }
     }
 
     if (invalid_entry >= 0) {
         set[invalid_entry].present = 1;
         set[invalid_entry].used = 1;
-        set[invalid_entry].address = addr;
+        set[invalid_entry].address = addr_trim;
     }
     return 1;
 }
 
-struct sim_pte_info *get_pte(tlb_sim_t *sim, unsigned long addr) {
-  struct sim_pte_info *info = sim->huge_pte_info;
-  while (info) {
-    if (info->virt_addr == addr) {
-      printk("found known page %lx\n", addr << 21);
-      return info;
+struct sim_pte_info *get_pte(tlb_sim_t *sim, unsigned long addr)
+{
+    struct sim_pte_info *info = sim->huge_pte_info;
+    while (info) {
+        if (info->virt_addr == addr) return info;
+        info = info->next;
     }
-    info = info->next;
-  }
-  return 0;
+    return 0;
 }
 
-int is_in_overlay(unsigned long addr, uint8_t obv[64]) {
-    unsigned int ind = (addr >> 12) % (1 << 9);
+int is_in_overlay(unsigned long addr, uint8_t obv[64])
+{
+    unsigned int ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
     return (obv[ind / 8] >> (ind % 8)) % 2;
 }
 
-void set_overlay(unsigned long addr, struct sim_pte_info *info) {
-    unsigned int ind = (addr >> 12) % (1 << 9);
+void set_overlay(unsigned long addr, struct sim_pte_info *info)
+{
+    unsigned int ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
     info->obv[ind / 8] |= (1 << (ind % 8));
 }
 
-void tlb_4k_miss(struct mm_struct *mm, unsigned long addr, int write) {
-    tlb_entry_t *set;
+void _tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int overlay)
+{
     int miss;
-    unsigned long addr4k = PAGE_4K(addr);
     tlb_sim_t *sim = mm->tlb_sim;
-    set = sim->sets[SET(addr4k, sim->set_bits)];
     sim->ignore_flush = 1;
-    miss = tlb_replace(addr4k, set, sim->entries_per_set, sim->mm, 12);
+    miss = tlb_replace(addr, huge ? (overlay ? &sim->tlb_2m_overlay : &sim->tlb_2m) :
+                      (overlay ? &sim->tlb_4k_overlay : &sim->tlb_4k), mm, huge ? SHIFT_2M : SHIFT_4K);
     sim->ignore_flush = 0;
+
     if (miss) {
-        sim->total_dtlb_misses++;
-        sim->total_dtlb_4k_misses++;
-        printk("4k miss %lx\n", addr);
+        if (huge && overlay) sim->total_dtlb_hugetlb_misses_overlay++;
+        else if (huge && !overlay) sim->total_dtlb_hugetlb_misses++;
+        else if (!huge && overlay) sim->total_dtlb_4k_misses_overlay++;
+        else sim->total_dtlb_4k_misses++;
+        if (print_tlbsim_debug) printk("%s%s miss %lx\n", overlay ? "overlay: " : "non-overlay:", huge ? "2m" : "4k", addr);
     }
 }
 
-void tlb_2m_miss(struct mm_struct *mm, unsigned long addr, int write) {
-    tlb_entry_t *set;
-    int miss;
-    unsigned long addr2m = PAGE_2M(addr);
+void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, unsigned long page_table)
+{
+    unsigned long addr2m = addr >> SHIFT_2M;
+    unsigned long phys2m = page_table >> SHIFT_2M;
     tlb_sim_t *sim = mm->tlb_sim;
-    set = sim->hugesets[SET(addr2m, sim->huge_set_bits)];
-    sim->ignore_flush = 1;
-    miss = tlb_replace(addr2m, set, sim->huge_entries_per_set, sim->mm, 21);
-    sim->ignore_flush = 0;
-
-    if (miss) {
-        sim->total_dtlb_misses++;
-        sim->total_dtlb_hugetlb_misses++;
-        printk("huge miss %lx\n", addr);
-    }
     struct sim_pte_info *info = get_pte(sim, addr2m);
-    if (!info) {
-        if (use_overlays) {
-            printk("adding new known page %lx\n", addr2m << 21);
+
+    if (info && info->phys_addr != phys2m) {
+        if (print_tlbsim_debug) printk("physical address for page %lx changed\n", addr2m << SHIFT_2M);
+    }
+
+    if (huge) _tlb_miss(mm, addr, 1, 0);
+    else _tlb_miss(mm, addr, 0, 0);
+
+    if (huge || info) {
+        if (!info) {
+            if (print_tlbsim_debug) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
             info = kcalloc(1, sizeof(*info), GFP_KERNEL);
             info->virt_addr = addr2m;
+            info->phys_addr = phys2m;
             info->next = sim->huge_pte_info;
             sim->huge_pte_info = info;
         }
-    } else {
+        //printk("known hugepage, flushing tlb at %lx\n", addr2m << SHIFT_2M);
+        sim->ignore_flush = 1;
+        flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
+        sim->ignore_flush = 0;
+
+        //if (!huge) printk("4k page %lx is in known hugepage, going to 2m tlb\n", addr);
+        _tlb_miss(mm, addr, 1, 1);
+
+        if (!huge && write && !is_in_overlay(addr, info->obv)) {
+            if (print_tlbsim_debug) printk("got write to %lx, adding to overlay\n", addr);
+            set_overlay(addr, info);
+        }
         if (is_in_overlay(addr, info->obv)) {
-            printk("%lx is overlay page, going to 4k tlb\n", addr);
-            tlb_4k_miss(mm, addr, write);
-        } else {
-            printk("a flushing tlb at %lx\n", addr2m << 21);
-            sim->ignore_flush = 1;
-            flush_tlb_mm_range(mm, addr2m << 21, (addr2m + 1) << 21, 0);
-            sim->ignore_flush = 0;
+            //printk("%lx is overlay page, going to 4k tlb\n", addr);
+            _tlb_miss(mm, addr, 0, 1);
         }
-    }
-}
-
-void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write) {
-    tlb_sim_t *sim = mm->tlb_sim;
-    if (huge) {
-        tlb_2m_miss(mm, addr, write);
     } else {
-        struct sim_pte_info *info = get_pte(sim, PAGE_2M(addr));
-        if (info) {
-            printk("%lx is in known hugepage, going to 2m tlb\n", addr);
-            if(write) set_overlay(addr, info);
-            // Wheter or not this page is in the overlay, the superpage needs to be in the tlb
-            tlb_2m_miss(mm, addr, write);
-        } else {
-          tlb_4k_miss(mm, addr, write);
-        }
+        _tlb_miss(mm, addr, 0, 1);
     }
 }
 
-void sim_cow(struct mm_struct *mm, unsigned long addr) {
-unsigned long addr2m = PAGE_2M(addr);
+void sim_cow(struct mm_struct *mm, unsigned long addr)
+{
+    unsigned long addr2m = addr >> SHIFT_2M;
     struct sim_pte_info *info = get_pte(mm->tlb_sim, addr2m);
     if (info) {
-        printk("cow on %lx, known page\n", addr);
+        if (print_tlbsim_debug) printk("cow on %lx, known page\n", addr);
         set_overlay(addr, info);
-        printk("b flushing tlb at %lx\n", addr2m << 21);
         mm->tlb_sim->ignore_flush = 1;
-        flush_tlb_mm_range(mm, addr2m << 21, (addr2m + 1) << 21, 0);
+        flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
         mm->tlb_sim->ignore_flush = 0;
     }
 }

@@ -657,40 +657,33 @@ void do_exit(long code)
 	TASKS_RCU(int tasks_rcu_i);
 
 	profile_task_exit(tsk);
-	
+
 	/*
 	* Statistics for Badger Trap
 	*/
-	if(current->mm && current->mm->badger_trap_en == 1)
-	{
-		mutex_lock(&result_mutex);
-		current->mm->tlb_sim->total_dtlb_misses+= current->total_dtlb_misses;
-		current->mm->tlb_sim->total_dtlb_4k_misses+= current->total_dtlb_4k_misses;
-		current->mm->tlb_sim->total_dtlb_hugetlb_misses+= current->total_dtlb_hugetlb_misses;
-		mutex_unlock(&result_mutex);
-	}
-
 	if(current->mm && current->mm->badger_trap_en == 1 && current->tgid == current->pid)
 	{
 		if(current->real_parent->mm->badger_trap_en == 1)
 		{
 			mutex_lock(&result_mutex);
-			current->real_parent->mm->tlb_sim->total_dtlb_misses += current->mm->tlb_sim->total_dtlb_misses;
 			current->real_parent->mm->tlb_sim->total_dtlb_4k_misses += current->mm->tlb_sim->total_dtlb_4k_misses;
 			current->real_parent->mm->tlb_sim->total_dtlb_hugetlb_misses += current->mm->tlb_sim->total_dtlb_hugetlb_misses;
+			current->real_parent->mm->tlb_sim->total_dtlb_4k_misses_overlay += current->mm->tlb_sim->total_dtlb_4k_misses_overlay;
+			current->real_parent->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay += current->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay;
 			mutex_unlock(&result_mutex);
 		}
 		else
 		{
 			printk("===================================\n");
 			printk("Statistics for Process %s\n",current->comm);
-			printk("DTLB miss detected %lu\n",current->mm->tlb_sim->total_dtlb_misses);
 			printk("DTLB miss for 4KB page detected %lu\n",current->mm->tlb_sim->total_dtlb_4k_misses);
 			printk("DTLB miss for hugepage detected %lu\n",current->mm->tlb_sim->total_dtlb_hugetlb_misses);
+			printk("Overlay: DTLB miss for 4KB page detected %lu\n",current->mm->tlb_sim->total_dtlb_4k_misses_overlay);
+			printk("Overlay: DTLB miss for hugepage detected %lu\n",current->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay);
 			printk("===================================\n");
 		}
 	}
-	
+
 	kcov_task_exit(tsk);
 
 	WARN_ON(blk_needs_flush_plug(tsk));
