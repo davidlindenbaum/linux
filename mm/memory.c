@@ -3347,8 +3347,9 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		prev_address = address;
 	}
 
-	if(consecutive > 1)
+	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
 	{
+		printk("4k page consecutive fake fault on %lx\n", address);
 		*page_table = pte_unreserve(*page_table);
 		pte_unmap_unlock(page_table, ptl);
 		return 0;
@@ -3360,14 +3361,14 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	*page_table = pte_mkyoung(*page_table);
 	*page_table = pte_unreserve(*page_table);
 
+	/* Here where we do all our analysis */
+	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, page_table->pte);
+
 	touch_page_addr = (void *)(address & PAGE_MASK);
 	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
 
 	if(ret)
 		return VM_FAULT_SIGBUS;
-
-	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, page_table->pte);
 
 	*page_table = pte_mkreserve(*page_table);
 	pte_unmap_unlock(page_table, ptl);
@@ -3512,8 +3513,9 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 		prev_address = address;
 	}
 
-	if(consecutive > 1)
+	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
 	{
+		printk("hugepage consecutive fake fault on %lx\n", address);
 		*page_table = pmd_unreserve(*page_table);
 		return 0;
 	}
@@ -3524,14 +3526,14 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 	*page_table = pmd_mkyoung(*page_table);
 	*page_table = pmd_unreserve(*page_table);
 
+	/* Here where we do all our analysis */
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, page_table->pmd);
+
 	touch_page_addr = (void *)(address & PAGE_MASK);
 	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
 
 	if(ret)
 		return VM_FAULT_SIGBUS;
-
-	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, page_table->pmd);
 
 	*page_table = pmd_mkreserve(*page_table);
 	return 0;

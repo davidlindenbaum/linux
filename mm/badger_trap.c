@@ -396,7 +396,15 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
     struct sim_pte_info *info = get_pte(sim, addr2m);
 
     if (info && info->phys_addr != phys2m) {
-        if (print_tlbsim_debug) printk("physical address for page %lx changed\n", addr2m << SHIFT_2M);
+        if (huge) {
+            info->virt_addr = addr2m;
+            info->phys_addr = phys2m;
+            info->cow = 0;
+            memset(info->obv, 0, sizeof info->obv);
+            if (print_tlbsim_debug) printk("hugepage %lx has new physical address, resetting\n", addr2m << SHIFT_2M);
+        } else {
+            if (print_tlbsim_debug) printk("physical address for page %lx changed, not handling\n", addr2m << SHIFT_2M);
+        }
     }
 
     if (huge) _tlb_miss(mm, addr, 1, 0);
@@ -411,12 +419,12 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
             info->next = sim->huge_pte_info;
             sim->huge_pte_info = info;
         }
-        //printk("known hugepage, flushing tlb at %lx\n", addr2m << SHIFT_2M);
+        //known hugepage, flushing tlb
         sim->ignore_flush = 1;
         flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
         sim->ignore_flush = 0;
 
-        //if (!huge) printk("4k page %lx is in known hugepage, going to 2m tlb\n", addr);
+        //4k page is in known hugepage, going to 2m tlb
         _tlb_miss(mm, addr, 1, 1);
 
         if (!huge && write && !is_in_overlay(addr, info->obv)) {

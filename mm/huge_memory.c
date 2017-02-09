@@ -2393,9 +2393,6 @@ static void collapse_huge_page(struct mm_struct *mm,
 				   struct vm_area_struct *vma,
 				   int node)
 {
-	if (mm->badger_trap_en) {
-		printk("Huge page collapse\n");
-	}
 	pmd_t *pmd, _pmd;
 	pte_t *pte;
 	pgtable_t pgtable;
@@ -2409,6 +2406,10 @@ static void collapse_huge_page(struct mm_struct *mm,
 	gfp_t gfp;
 
 	VM_BUG_ON(address & ~HPAGE_PMD_MASK);
+
+	if (mm->badger_trap_en && print_tlbsim_debug) {
+		printk("Huge page collapse\n");
+	}
 
 	/* Only allocate from the target node */
 	gfp = alloc_hugepage_khugepaged_gfpmask() | __GFP_OTHER_NODE | __GFP_THISNODE;
@@ -2906,9 +2907,6 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		unsigned long haddr, bool freeze)
 {
-	if (vma->vm_mm->badger_trap_en) {
-		printk("Huge page split\n");
-	}
 	struct mm_struct *mm = vma->vm_mm;
 	struct page *page;
 	pgtable_t pgtable;
@@ -2922,18 +2920,22 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	VM_BUG_ON_VMA(vma->vm_end < haddr + HPAGE_PMD_SIZE, vma);
 	VM_BUG_ON(!pmd_trans_huge(*pmd) && !pmd_devmap(*pmd));
 
+	if (mm && mm->badger_trap_en && print_tlbsim_debug) {
+		printk("Huge page split\n");
+	}
+
 	count_vm_event(THP_SPLIT_PMD);
 
 	if (vma_is_dax(vma)) {
 		pmd_t _pmd = pmdp_huge_clear_flush_notify(vma, haddr, pmd);
 		if (is_huge_zero_pmd(_pmd))
 			put_huge_zero_page();
-		if (mm && mm->badger_trap_en) {
+		if (mm && mm->badger_trap_en && print_tlbsim_debug) {
 			printk("split dax vma\n");
 		}
 		return;
 	} else if (is_huge_zero_pmd(*pmd)) {
-		if (mm && mm->badger_trap_en) {
+		if (mm && mm->badger_trap_en && print_tlbsim_debug) {
 			printk("split zero pmd\n");
 		}
 		return __split_huge_zero_page_pmd(vma, haddr, pmd);

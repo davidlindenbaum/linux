@@ -3,6 +3,7 @@
 
 #define MAX_NAME_LEN	16
 #define PTE_RESERVED_MASK	(_AT(pteval_t, 1) << 51)
+#define CONSECUTIVE_FAKE_FAULT_LIMIT 50
 
 extern char badger_trap_process[CONFIG_NR_CPUS][MAX_NAME_LEN];
 
