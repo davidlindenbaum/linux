@@ -384,26 +384,54 @@ void _tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int overlay)
         else if (huge && !overlay) sim->total_dtlb_hugetlb_misses++;
         else if (!huge && overlay) sim->total_dtlb_4k_misses_overlay++;
         else sim->total_dtlb_4k_misses++;
-        if (print_tlbsim_debug) printk("%s%s miss %lx\n", overlay ? "overlay: " : "non-overlay:", huge ? "2m" : "4k", addr);
+        if (print_tlbsim_debug > 2) printk("%s%s miss %lx\n", overlay ? "overlay: " : "non-overlay:", huge ? "2m" : "4k", addr);
     }
 }
 
 void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, unsigned long page_table)
 {
+    //2m aligned address of virtual page
     unsigned long addr2m = addr >> SHIFT_2M;
+    //2m aligned address of physical page
     unsigned long phys2m = page_table >> SHIFT_2M;
+    //index of virtual 4k page in 2m region
+    unsigned long virt_ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
+    //index of physical 4k page in 2m region
+    unsigned long phys_ind = (page_table >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
+
     tlb_sim_t *sim = mm->tlb_sim;
     struct sim_pte_info *info = get_pte(sim, addr2m);
 
+    if (!huge && !info && virt_ind == phys_ind) {
+        //we have a 4k page that's algined like a superpage - can create a new superpage here
+        if (print_tlbsim_debug) printk("found aligned 4k page in %lx - creating superpage\n", addr2m << SHIFT_2M);
+        if (print_tlbsim_debug) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
+        info = kcalloc(1, sizeof(*info), GFP_KERNEL);
+        info->virt_addr = addr2m;
+        info->phys_addr = phys2m;
+        info->next = sim->huge_pte_info;
+        sim->huge_pte_info = info;
+    }
+
+    if (info && !huge && virt_ind != phys_ind && !is_in_overlay(addr, info->obv)) {
+      if (print_tlbsim_debug) printk("page %lx not in the correct index, setting overlay\n", (addr >> SHIFT_4K) << SHIFT_4K);
+      set_overlay(addr, info);
+    }
+
     if (info && info->phys_addr != phys2m) {
-        if (huge) {
+        if (huge && info->cow == 1) {
+            //cow == 1 means it just got copied-on-write, which means the phys addr is about to change - now it has, so we set cow to 2
+            info->cow = 2;
+            info->phys_addr = phys2m;
+        } else if (huge) {
             info->virt_addr = addr2m;
             info->phys_addr = phys2m;
             info->cow = 0;
             memset(info->obv, 0, sizeof info->obv);
             if (print_tlbsim_debug) printk("hugepage %lx has new physical address, resetting\n", addr2m << SHIFT_2M);
-        } else {
-            if (print_tlbsim_debug) printk("physical address for page %lx changed, not handling\n", addr2m << SHIFT_2M);
+        } else if (!is_in_overlay(addr, info->obv)) {
+            if (print_tlbsim_debug) printk("physical address for page %lx changed, setting overlay\n", addr2m << SHIFT_2M);
+            set_overlay(addr, info);
         }
     }
 
@@ -412,27 +440,31 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
 
     if (huge || info) {
         if (!info) {
-            if (print_tlbsim_debug) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
+            if (print_tlbsim_debug > 1) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
             info = kcalloc(1, sizeof(*info), GFP_KERNEL);
             info->virt_addr = addr2m;
             info->phys_addr = phys2m;
             info->next = sim->huge_pte_info;
             sim->huge_pte_info = info;
         }
-        //known hugepage, flushing tlb
-        sim->ignore_flush = 1;
-        flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
-        sim->ignore_flush = 0;
 
-        //4k page is in known hugepage, going to 2m tlb
+        /*if (info->cow) {
+            //cow hugepage, flushing tlb so we get traps on writes
+            sim->ignore_flush = 1;
+            flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
+            sim->ignore_flush = 0;
+        }*/
+
+        //page is in known hugepage, going to 2m tlb (whether or not it's actually a 4k page)
         _tlb_miss(mm, addr, 1, 1);
 
-        if (!huge && write && !is_in_overlay(addr, info->obv)) {
-            if (print_tlbsim_debug) printk("got write to %lx, adding to overlay\n", addr);
+        if (!huge && write && !is_in_overlay(addr, info->obv) && info->cow) {
+            //do overlay-on-write
+            if (print_tlbsim_debug) printk("got write to %lx in cow page, adding to overlay\n", addr);
             set_overlay(addr, info);
         }
         if (is_in_overlay(addr, info->obv)) {
-            //printk("%lx is overlay page, going to 4k tlb\n", addr);
+            //overlay page, going to 4k tlb
             _tlb_miss(mm, addr, 0, 1);
         }
     } else {
@@ -447,6 +479,7 @@ void sim_cow(struct mm_struct *mm, unsigned long addr)
     if (info) {
         if (print_tlbsim_debug) printk("cow on %lx, known page\n", addr);
         set_overlay(addr, info);
+        info->cow = 1;
         mm->tlb_sim->ignore_flush = 1;
         flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
         mm->tlb_sim->ignore_flush = 0;

@@ -3362,7 +3362,7 @@ static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	*page_table = pte_unreserve(*page_table);
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, page_table->pte);
+	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, pte_val(*page_table));
 
 	touch_page_addr = (void *)(address & PAGE_MASK);
 	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
@@ -3527,7 +3527,7 @@ static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *v
 	*page_table = pmd_unreserve(*page_table);
 
 	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, page_table->pmd);
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, pmd_val(*page_table));
 
 	touch_page_addr = (void *)(address & PAGE_MASK);
 	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));

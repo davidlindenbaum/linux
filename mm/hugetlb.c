@@ -3645,10 +3645,11 @@ static int hugetlb_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	{
 		consecutive = 0;
 		prev_address = address;
-       }
+  }
 
-	if(consecutive > 1)
+	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
 	{
+		printk("hugepage consecutive fake fault on %lx\n", address);
 		*page_table = pte_unreserve(*page_table);
 		return 0;
 	}
@@ -3659,14 +3660,14 @@ static int hugetlb_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	*page_table = pte_mkyoung(*page_table);
 	*page_table = pte_unreserve(*page_table);
 
+		/* Here where we do all our analysis */
+		tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, pte_val(*page_table));
+
 	touch_page_addr = (void *)(address & PAGE_MASK);
 	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
 
 	if(ret)
 		return VM_FAULT_SIGBUS;
-
-	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, page_table->pte);
 
 	*page_table = pte_mkreserve(*page_table);
 	return 0;
