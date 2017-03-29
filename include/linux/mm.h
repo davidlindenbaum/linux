@@ -583,9 +583,8 @@ static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
 	return pte;
 }
 
-void do_set_pte(struct mm_struct *mm, struct vm_area_struct *vma,
-        unsigned long address, struct page *page, pte_t *pte, bool write,
-        bool anon, unsigned int flags);
+void do_set_pte(struct vm_area_struct *vma, unsigned long address,
+		struct page *page, pte_t *pte, bool write, bool anon);
 #endif
 
 /*

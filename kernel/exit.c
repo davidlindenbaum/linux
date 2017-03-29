@@ -670,16 +670,29 @@ void do_exit(long code)
 			current->real_parent->mm->tlb_sim->total_dtlb_hugetlb_misses += current->mm->tlb_sim->total_dtlb_hugetlb_misses;
 			current->real_parent->mm->tlb_sim->total_dtlb_4k_misses_overlay += current->mm->tlb_sim->total_dtlb_4k_misses_overlay;
 			current->real_parent->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay += current->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay;
+			current->real_parent->mm->tlb_sim->total_dtlb_4k_misses_watched += current->mm->tlb_sim->total_dtlb_4k_misses_watched;
+			current->real_parent->mm->tlb_sim->total_dtlb_hugetlb_misses_watched += current->mm->tlb_sim->total_dtlb_hugetlb_misses_watched;
 			mutex_unlock(&result_mutex);
 		}
 		else
 		{
+			int touched = 0;
+			int total = 0;
+			struct test_list_node *node = current->mm->tlb_sim->test_list;
+			while(node) {
+				total++;
+				if (node->touched) touched++;
+				node = node->next;
+			}
 			printk("===================================\n");
+			printk("%d of %d touched \n", touched, total);
 			printk("Statistics for Process %s\n",current->comm);
 			printk("DTLB miss for 4KB page detected %lu\n",current->mm->tlb_sim->total_dtlb_4k_misses);
 			printk("DTLB miss for hugepage detected %lu\n",current->mm->tlb_sim->total_dtlb_hugetlb_misses);
 			printk("Overlay: DTLB miss for 4KB page detected %lu\n",current->mm->tlb_sim->total_dtlb_4k_misses_overlay);
 			printk("Overlay: DTLB miss for hugepage detected %lu\n",current->mm->tlb_sim->total_dtlb_hugetlb_misses_overlay);
+			printk("Watched: DTLB miss for 4KB page detected %lu\n",current->mm->tlb_sim->total_dtlb_4k_misses_watched);
+			printk("Watched: DTLB miss for hugepage detected %lu\n",current->mm->tlb_sim->total_dtlb_hugetlb_misses_watched);
 			printk("===================================\n");
 		}
 	}

@@ -1232,7 +1232,6 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code,
 		return;
 	}
 
-	/* kprobes don't want to hook the spurious faults: */
 	if (unlikely(error_code & PF_RSVD) && current->mm->badger_trap_en==0)
 		pgtable_bad(regs, error_code, address);
 
@@ -1343,7 +1342,7 @@ good_area:
 		bad_area_access_error(regs, error_code, address, vma);
 		return;
 	}
-	
+
 	/*
 	 * If for any reason at all we couldn't handle the fault,
 	 * make sure we exit gracefully rather than endlessly redo

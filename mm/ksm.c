@@ -1702,8 +1702,6 @@ static int ksmd_should_run(void)
 
 static int ksm_scan_thread(void *nothing)
 {
-	//disable ksm at this level because the overlay sim interferees with it somehow causing general protection faults
-	return 0;
 	set_freezable();
 	set_user_nice(current, 5);
 

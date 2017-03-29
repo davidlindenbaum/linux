@@ -749,13 +749,13 @@ static inline pmd_t native_local_pmdp_get_and_clear(pmd_t *pmdp)
 static inline void native_set_pte_at(struct mm_struct *mm, unsigned long addr,
 				     pte_t *ptep , pte_t pte)
 {
-	native_set_pte(ptep, pte);
+	native_set_pte(ptep, (mm && mm->badger_trap_en && (pte_flags(pte) & _PAGE_USER)) ? pte_set_flags(pte, (_AT(pteval_t, 1) << 51)) : pte);
 }
 
 static inline void native_set_pmd_at(struct mm_struct *mm, unsigned long addr,
 				     pmd_t *pmdp , pmd_t pmd)
 {
-	native_set_pmd(pmdp, pmd);
+	native_set_pmd(pmdp, (mm && mm->badger_trap_en && (pmd_flags(pmd) & _PAGE_USER)) ? pmd_set_flags(pmd, (_AT(pmdval_t, 1) << 51)) : pmd);
 }
 
 #ifndef CONFIG_PARAVIRT

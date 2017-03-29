@@ -88,10 +88,8 @@ EXPORT_SYMBOL(max_mapnr);
 EXPORT_SYMBOL(mem_map);
 #endif
 
-extern inline pte_t pte_mkreserve(pte_t pte);
 extern inline pte_t pte_unreserve(pte_t pte);
 extern inline int is_pte_reserved(pte_t pte);
-extern inline pmd_t pmd_mkreserve(pmd_t pmd);
 extern inline pmd_t pmd_unreserve(pmd_t pmd);
 extern inline int is_pmd_reserved(pmd_t pmd);
 
@@ -2146,12 +2144,6 @@ static int wp_page_copy(struct mm_struct *mm, struct vm_area_struct *vma,
 		entry = mk_pte(new_page, vma->vm_page_prot);
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 
-		/* Make the page table entry as reserved for TLB miss tracking */
-		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-		{
-			entry = pte_mkreserve(entry);
-		}
-
 		/* Clear the pte entry and flush it first, before updating the
 		 * pte with the new entry. This will avoid a race condition
 		 * seen in the presence of one thread doing SMC and another
@@ -2610,13 +2602,6 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	flush_icache_page(vma, page);
 	if (pte_swp_soft_dirty(orig_pte))
 		pte = pte_mksoft_dirty(pte);
-
-	/* Make the page table entry as reserved for TLB miss tracking */
-	if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-	{
-		pte = pte_mkreserve(pte);
-	}
-
 	set_pte_at(mm, address, page_table, pte);
 	if (page == swapcache) {
 		do_page_add_anon_rmap(page, vma, address, exclusive);
@@ -2785,11 +2770,6 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	mem_cgroup_commit_charge(page, memcg, false, false);
 	lru_cache_add_active_or_unevictable(page, vma);
 setpte:
-	/* Make the page table entry as reserved for TLB miss tracking */
-	if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-	{
-		entry = pte_mkreserve(entry);
-	}
 	set_pte_at(mm, address, page_table, entry);
 
 	/* No need to invalidate - it was non-present before */
@@ -2864,9 +2844,8 @@ static int __do_fault(struct vm_area_struct *vma, unsigned long address,
  * Target users are page handler itself and implementations of
  * vm_ops->map_pages.
  */
-void do_set_pte(struct mm_struct *mm, struct vm_area_struct *vma,
-        unsigned long address, struct page *page, pte_t *pte, bool write,
-        bool anon, unsigned int flags)
+void do_set_pte(struct vm_area_struct *vma, unsigned long address,
+		struct page *page, pte_t *pte, bool write, bool anon)
 {
 	pte_t entry;
 
@@ -2880,10 +2859,6 @@ void do_set_pte(struct mm_struct *mm, struct vm_area_struct *vma,
 	} else {
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page);
-	}
-	if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-	{
-		entry = pte_mkreserve(entry);
 	}
 	set_pte_at(vma->vm_mm, address, pte, entry);
 
@@ -3032,7 +3007,7 @@ static int do_read_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		put_page(fault_page);
 		return ret;
 	}
-	do_set_pte(mm, vma, address, fault_page, pte, false, false, flags);
+	do_set_pte(vma, address, fault_page, pte, false, false);
 	unlock_page(fault_page);
 unlock_out:
 	pte_unmap_unlock(pte, ptl);
@@ -3088,7 +3063,7 @@ static int do_cow_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	if(mm && mm->badger_trap_en) {
 		sim_cow(mm, address);
 	}
-	do_set_pte(mm, vma, address, new_page, pte, true, true, flags);
+	do_set_pte(vma, address, new_page, pte, true, true);
 	mem_cgroup_commit_charge(new_page, memcg, false, false);
 	lru_cache_add_active_or_unevictable(new_page, vma);
 	pte_unmap_unlock(pte, ptl);
@@ -3145,7 +3120,7 @@ static int do_shared_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		put_page(fault_page);
 		return ret;
 	}
-	do_set_pte(mm, vma, address, fault_page, pte, true, false, flags);
+	do_set_pte(vma, address, fault_page, pte, true, false);
 	pte_unmap_unlock(pte, ptl);
 
 	if (set_page_dirty(fault_page))
@@ -3326,57 +3301,6 @@ static int wp_huge_pmd(struct mm_struct *mm, struct vm_area_struct *vma,
 }
 
 /*
- * This function handles the fake page fault introduced to perform TLB miss
- * studies. We can perform our work in this fuction on the page table entries.
- */
-static int do_fake_page_fault(struct mm_struct *mm, struct vm_area_struct *vma,
-		unsigned long address, pte_t *page_table, pmd_t *pmd,
-		unsigned int flags, spinlock_t *ptl)
-{
-	unsigned long *touch_page_addr;
-	unsigned long touched;
-	unsigned long ret;
-	static unsigned int consecutive = 0;
-	static unsigned long prev_address = 0;
-
-	if(address == prev_address)
-		consecutive++;
-	else
-	{
-		consecutive = 0;
-		prev_address = address;
-	}
-
-	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
-	{
-		printk("4k page consecutive fake fault on %lx\n", address);
-		*page_table = pte_unreserve(*page_table);
-		pte_unmap_unlock(page_table, ptl);
-		return 0;
-	}
-
-	if(flags & FAULT_FLAG_WRITE)
-		*page_table = pte_mkdirty(*page_table);
-
-	*page_table = pte_mkyoung(*page_table);
-	*page_table = pte_unreserve(*page_table);
-
-	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 0, flags & FAULT_FLAG_WRITE, pte_val(*page_table));
-
-	touch_page_addr = (void *)(address & PAGE_MASK);
-	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
-
-	if(ret)
-		return VM_FAULT_SIGBUS;
-
-	*page_table = pte_mkreserve(*page_table);
-	pte_unmap_unlock(page_table, ptl);
-
-	return 0;
-}
-
-/*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most
  * RISC architectures).  The early dirtying is also good on the i386.
@@ -3400,46 +3324,23 @@ static int handle_pte_fault(struct mm_struct *mm,
 	spinlock_t *ptl;
 
 	pte_t* page_table;
+	int ret;
 
-	if(mm && mm->badger_trap_en && (flags & FAULT_FLAG_INSTRUCTION))
-	{
-		if(is_pte_reserved(*pte))
-			*pte = pte_unreserve(*pte);
-	}
-
-	/* We need to figure out if the page fault is a fake page fault or not.
-	 * If it is a fake page fault, we need to handle it specially. It has to
-	 * be made sure that the special page fault is not on instruction fault.
-	 * Our technique cannot not handle instruction page fault yet.
-	 *
-	 * We can have two cases when we have a fake page fault:
-	 * 1. We have taken a fake page fault on a COW page. A
-	 * 	fake page fault on a COW page if for reading only
-	 * 	has to be considered a normal fake page fault. But
-	 * 	for writing purposes need to be handled correctly.
-	 * 2. We have taken a fake page fault on a normal page.
+	/*
+	 * This may or may not be an actual 'fake fault', so the original
+	 * BadgerTrap code had additional checks here. For TLB simulation,
+	 * false-positive faults don't matter so we'll just pass every
+	 * page fault along to the simulation.
 	 */
-	if(mm && mm->badger_trap_en && (!(flags & FAULT_FLAG_INSTRUCTION)) && pte_present(*pte))
-	{
-		page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
-		entry = *page_table;
-		if((flags & FAULT_FLAG_WRITE) && is_pte_reserved(entry) && !pte_write(entry))
-		{
+	if(mm && mm->badger_trap_en) {
+		if (flags & FAULT_FLAG_INSTRUCTION) {
+			if(is_pte_reserved(*pte)) *pte = pte_unreserve(*pte);
+		} else if (pte_present(*pte)) {
+			page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
+			ret = do_fake_page_fault(mm, address, page_table, flags, 0);
 			pte_unmap_unlock(page_table, ptl);
-			ptl = pte_lockptr(mm,pmd);
-			spin_lock(ptl);
-			entry = *pte;
-			return do_wp_page(mm, vma, address,
-						pte, pmd, ptl, entry,flags);
+			if (ret) return ret;
 		}
-		else if(is_pte_reserved(entry))
-		{
-			return do_fake_page_fault(mm, vma, address,
-						page_table, pmd, flags, ptl);
-		}
-
-		*page_table = pte_mkreserve(*page_table);
-		pte_unmap_unlock(page_table, ptl);
 	}
 
 	/*
@@ -3496,49 +3397,6 @@ unlock:
 	return 0;
 }
 
-static int transparent_fake_fault(struct mm_struct *mm, struct vm_area_struct *vma,
-                        unsigned long address, pmd_t *page_table, unsigned int flags)
-{
-	unsigned long *touch_page_addr;
-	unsigned long touched;
-	unsigned long ret;
-	static unsigned int consecutive = 0;
-	static unsigned long prev_address = 0;
-
-	if(address == prev_address)
-		consecutive++;
-	else
-	{
-		consecutive = 0;
-		prev_address = address;
-	}
-
-	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
-	{
-		printk("hugepage consecutive fake fault on %lx\n", address);
-		*page_table = pmd_unreserve(*page_table);
-		return 0;
-	}
-
-	if(flags & FAULT_FLAG_WRITE)
-		*page_table = pmd_mkdirty(*page_table);
-
-	*page_table = pmd_mkyoung(*page_table);
-	*page_table = pmd_unreserve(*page_table);
-
-	/* Here where we do all our analysis */
-	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, pmd_val(*page_table));
-
-	touch_page_addr = (void *)(address & PAGE_MASK);
-	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
-
-	if(ret)
-		return VM_FAULT_SIGBUS;
-
-	*page_table = pmd_mkreserve(*page_table);
-	return 0;
-}
-
 /*
  * By the time we get here, we already hold the mm semaphore
  *
@@ -3571,28 +3429,21 @@ static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	pmd = pmd_offset(pud,address);
 
 	/*
-	 * Here we check for transparent huge page that are marked as reserved
+	 * Here we check for transparent huge page that are marked as reserved.
+	 * This may or may not be an actual 'fake fault', so the original
+	 * BadgerTrap code had additional checks here. For TLB simulation,
+	 * false-positive faults don't matter so we'll just pass every
+	 * page fault along to the simulation.
 	 */
-	if(mm && mm->badger_trap_en && (!(flags & FAULT_FLAG_INSTRUCTION)) && pmd && pmd_trans_huge(*pmd))
-	{
-		spin_lock(&mm->page_table_lock);
-		entry = *pmd;
-		if((flags & FAULT_FLAG_WRITE) && is_pmd_reserved(entry) && !pmd_write(entry) && pmd_present(entry))
-		{
-			spin_unlock(&mm->page_table_lock);
-			return do_huge_pmd_wp_page(mm, vma, address, pmd, entry,flags);
-		}
-		if(is_pmd_reserved(entry) && pmd_present(entry))
-		{
-			ret = transparent_fake_fault(mm, vma, address, pmd, flags);
-			spin_unlock(&mm->page_table_lock);
-			return ret;
-		}
-		if(pmd_present(entry))
-		{
-			*pmd = pmd_mkreserve(*pmd);
+	 if(mm && mm->badger_trap_en && pmd && pmd_trans_huge(*pmd)) {
+ 		spin_lock(&mm->page_table_lock);
+		if (flags & FAULT_FLAG_INSTRUCTION) {
+			if(is_pmd_reserved(*pmd)) *pmd = pmd_unreserve(*pmd);
+		} else if (pmd_present(*pmd)) {
+			ret = transparent_fake_fault(mm, address, pmd, flags);
 		}
 		spin_unlock(&mm->page_table_lock);
+		if (ret) return ret;
 	}
 
 	pmd = pmd_alloc(mm, pud, address);

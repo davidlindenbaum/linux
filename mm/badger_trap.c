@@ -13,6 +13,10 @@ int hugetlb_set_bits = 3;
 int hugetlb_entries_per_set = 4;
 char badger_trap_process[CONFIG_NR_CPUS][MAX_NAME_LEN] = {0};
 int print_tlbsim_debug = 0;
+unsigned long watched_addr = 0x7fff00000000;
+int watched_len = 1024*1024*2;
+DEFINE_MUTEX(badger_trap_mutex);
+
 
 SYSCALL_DEFINE5(set_tlb_sim_params, int, set_bits, int, entries_per_set, int, huge_set_bits, int, huge_entries_per_set, int, print_verbose)
 {
@@ -384,8 +388,24 @@ void _tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int overlay)
         else if (huge && !overlay) sim->total_dtlb_hugetlb_misses++;
         else if (!huge && overlay) sim->total_dtlb_4k_misses_overlay++;
         else sim->total_dtlb_4k_misses++;
+
+        if (addr >= watched_addr && addr < watched_addr + watched_len) {
+            if (huge && overlay) sim->total_dtlb_hugetlb_misses_watched++;
+            else if (!huge && overlay) sim->total_dtlb_4k_misses_watched++;
+        }
         if (print_tlbsim_debug > 2) printk("%s%s miss %lx\n", overlay ? "overlay: " : "non-overlay:", huge ? "2m" : "4k", addr);
     }
+}
+
+int should_reset(struct sim_pte_info *info) {
+    int count = 0;
+    int i, j;
+    for (i = 0; i < sizeof(info->obv); i++) {
+        for (j = 0; j < 8; j++) {
+            if ((info->obv[i] >> j) % 2) count++;
+        }
+    }
+    return count > 50;
 }
 
 void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, unsigned long page_table)
@@ -399,8 +419,16 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
     //index of physical 4k page in 2m region
     unsigned long phys_ind = (page_table >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
 
+    mutex_lock(&badger_trap_mutex);
+
     tlb_sim_t *sim = mm->tlb_sim;
     struct sim_pte_info *info = get_pte(sim, addr2m);
+
+    struct test_list_node *tnode = sim->test_list;
+    while(tnode) {
+        if ((addr >> SHIFT_2M) == tnode->addr >> SHIFT_2M) tnode->touched = 1;
+        tnode = tnode->next;
+    }
 
     if (!huge && !info && virt_ind == phys_ind) {
         //we have a 4k page that's algined like a superpage - can create a new superpage here
@@ -433,6 +461,11 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
             if (print_tlbsim_debug) printk("physical address for page %lx changed, setting overlay\n", addr2m << SHIFT_2M);
             set_overlay(addr, info);
         }
+    }
+
+    if (info && should_reset(info)) {
+        if (print_tlbsim_debug) printk("page %lx has too many overlays, resetting\n", addr2m << SHIFT_2M);
+        info->virt_addr = 0;
     }
 
     if (huge) _tlb_miss(mm, addr, 1, 0);
@@ -470,6 +503,7 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
     } else {
         _tlb_miss(mm, addr, 0, 1);
     }
+    mutex_unlock(&badger_trap_mutex);
 }
 
 void sim_cow(struct mm_struct *mm, unsigned long addr)
@@ -484,4 +518,81 @@ void sim_cow(struct mm_struct *mm, unsigned long addr)
         flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
         mm->tlb_sim->ignore_flush = 0;
     }
+}
+
+int transparent_fake_fault(struct mm_struct *mm, unsigned long address, pmd_t *page_table, unsigned int flags)
+{
+	unsigned long *touch_page_addr;
+	unsigned long touched;
+	unsigned long ret;
+	static unsigned int consecutive = 0;
+	static unsigned long prev_address = 0;
+
+	if(address == prev_address)
+		consecutive++;
+	else
+	{
+		consecutive = 0;
+		prev_address = address;
+	}
+
+  *page_table = pmd_unreserve(*page_table);
+	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
+	{
+		printk("transparent hugepage consecutive fake fault on %lx\n", address);
+		return 0;
+	}
+
+	/* Here where we do all our analysis */
+	tlb_miss(mm, address, 1, flags & FAULT_FLAG_WRITE, pmd_val(*page_table));
+
+	touch_page_addr = (void *)(address & PAGE_MASK);
+	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
+
+	if(ret)
+		return VM_FAULT_SIGBUS;
+
+	*page_table = pmd_mkreserve(*page_table);
+	return 0;
+}
+
+/*
+ * This function handles the fake page fault introduced to perform TLB miss
+ * studies. We can perform our work in this fuction on the page table entries.
+ */
+int do_fake_page_fault(struct mm_struct *mm, unsigned long address, pte_t *page_table, unsigned int flags, int huge)
+{
+	unsigned long *touch_page_addr;
+	unsigned long touched;
+	unsigned long ret;
+	static unsigned int consecutive = 0;
+	static unsigned long prev_address = 0;
+
+	if(address == prev_address)
+		consecutive++;
+	else
+	{
+		consecutive = 0;
+		prev_address = address;
+	}
+
+  *page_table = pte_unreserve(*page_table);
+	if(consecutive > CONSECUTIVE_FAKE_FAULT_LIMIT)
+	{
+		printk("consecutive fake fault on %lx\n", address);
+		return 0;
+	}
+
+	/* Here where we do all our analysis */
+	tlb_miss(mm, address, huge, flags & FAULT_FLAG_WRITE, pte_val(*page_table));
+
+	touch_page_addr = (void *)(address & PAGE_MASK);
+	ret = copy_from_user(&touched, (__force const void __user *)touch_page_addr, sizeof(unsigned long));
+
+	if(ret)
+		return VM_FAULT_SIGBUS;
+
+	*page_table = pte_mkreserve(*page_table);
+
+	return 0;
 }

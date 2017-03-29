@@ -35,9 +35,6 @@
 #include <asm/pgalloc.h>
 #include "internal.h"
 
-extern inline pmd_t pmd_mkreserve(pmd_t pmd);
-extern inline pte_t pte_mkreserve(pte_t pte);
-
 enum scan_result {
 	SCAN_FAIL,
 	SCAN_SUCCEED,
@@ -857,12 +854,6 @@ static int __do_huge_pmd_anonymous_page(struct mm_struct *mm,
 		lru_cache_add_active_or_unevictable(page, vma);
 		pgtable_trans_huge_deposit(mm, pmd, pgtable);
 
-		/* Make the page table entry as reserved for TLB miss tracking */
-		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-		{
-			entry = pmd_mkreserve(entry);
-		}
-
 		set_pmd_at(mm, haddr, pmd, entry);
 		add_mm_counter(mm, MM_ANONPAGES, HPAGE_PMD_NR);
 		atomic_long_inc(&mm->nr_ptes);
@@ -911,14 +902,6 @@ static bool set_huge_zero_page(pgtable_t pgtable, struct mm_struct *mm,
 	entry = pmd_mkhuge(entry);
 	if (pgtable)
 		pgtable_trans_huge_deposit(mm, pmd, pgtable);
-	/* Make the page table entry as reserved for TLB miss tracking
-	 * No need to worry for zero page with instruction faults.
-	 * Instruction faults will never reach here.
-	 */
-	if(mm && (mm->badger_trap_en==1))
-	{
-		entry = pmd_mkreserve(entry);
-	}
 	set_pmd_at(mm, haddr, pmd, entry);
 	atomic_long_inc(&mm->nr_ptes);
 	return true;
@@ -1261,11 +1244,6 @@ static int do_huge_pmd_wp_page_fallback(struct mm_struct *mm,
 		lru_cache_add_active_or_unevictable(pages[i], vma);
 		pte = pte_offset_map(&_pmd, haddr);
 		VM_BUG_ON(!pte_none(*pte));
-		/* Make the page table entry as reserved for TLB miss tracking */
-		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-		{
-			entry = pte_mkreserve(entry);
-		}
 		set_pte_at(mm, haddr, pte, entry);
 		pte_unmap(pte);
 	}
@@ -1407,12 +1385,6 @@ alloc:
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
 		pmdp_huge_clear_flush_notify(vma, haddr, pmd);
 		page_add_new_anon_rmap(new_page, vma, haddr, true);
-
-		/* Make the page table entry as reserved for TLB miss tracking */
-		if(mm && (mm->badger_trap_en==1) && (!(flags & FAULT_FLAG_INSTRUCTION)))
-		{
-			entry = pmd_mkreserve(entry);
-		}
 
 		mem_cgroup_commit_charge(new_page, memcg, false, true);
 		lru_cache_add_active_or_unevictable(new_page, vma);
@@ -2920,9 +2892,8 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 	VM_BUG_ON_VMA(vma->vm_end < haddr + HPAGE_PMD_SIZE, vma);
 	VM_BUG_ON(!pmd_trans_huge(*pmd) && !pmd_devmap(*pmd));
 
-	if (mm && mm->badger_trap_en && print_tlbsim_debug) {
-		printk("Huge page split\n");
-	}
+	if (mm && mm->badger_trap_en && print_tlbsim_debug)
+		printk("Huge page split %lx\n", haddr);
 
 	count_vm_event(THP_SPLIT_PMD);
 
@@ -2973,9 +2944,6 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		}
 		if (dirty)
 			SetPageDirty(page + i);
-		if (mm && mm->badger_trap_en) {
-			entry = pte_mkreserve(entry);
-		}
 		pte = pte_offset_map(&_pmd, addr);
 		BUG_ON(!pte_none(*pte));
 		set_pte_at(mm, addr, pte, entry);
@@ -3220,6 +3188,9 @@ static void __split_huge_page(struct page *page, struct list_head *list)
 	struct zone *zone = page_zone(head);
 	struct lruvec *lruvec;
 	int i;
+	if (current->mm && current->mm->badger_trap_en && print_tlbsim_debug) {
+		printk("Huge page split 2 %lx\n", page_address(head));
+	}
 
 	/* prevent PageLRU to go away from under us, and freeze lru stats */
 	spin_lock_irq(&zone->lru_lock);
@@ -3350,6 +3321,9 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 		__split_huge_page(page, list);
 		ret = 0;
 	} else if (IS_ENABLED(CONFIG_DEBUG_VM) && mapcount) {
+		if (current->mm && current->mm->badger_trap_en && print_tlbsim_debug) {
+			printk("Huge page split fail a %lx\n", page_address(head));
+		}
 		spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
 		pr_alert("total_mapcount: %u, page_count(): %u\n",
 				mapcount, count);
@@ -3358,6 +3332,9 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 		dump_page(page, "total_mapcount(head) > 0");
 		BUG();
 	} else {
+		if (current->mm && current->mm->badger_trap_en && print_tlbsim_debug) {
+			printk("Huge page split fail b %lx\n", page_address(head));
+		}
 		spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
 		unfreeze_page(head);
 		ret = -EBUSY;
