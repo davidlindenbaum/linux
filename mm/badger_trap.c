@@ -183,7 +183,6 @@ void init_tlb_sim(struct mm_struct *mm, int keep_info)
     init_tlb_data(&s->tlb_2m_overlay, hugetlb_set_bits, hugetlb_entries_per_set);
 
     s->huge_pte_info = NULL;
-    //if (keep_info) s->huge_pte_info = mm->tlb_sim->huge_pte_info;
     if (keep_info) {
         struct sim_pte_info *info = mm->tlb_sim->huge_pte_info;
         while (info) {
@@ -352,7 +351,7 @@ int tlb_replace(unsigned long addr, tlb_sim_data_t *data, struct mm_struct *mm, 
     return 1;
 }
 
-struct sim_pte_info *get_pte(tlb_sim_t *sim, unsigned long addr)
+struct sim_pte_info *get_sim_pte(tlb_sim_t *sim, unsigned long addr)
 {
     struct sim_pte_info *info = sim->huge_pte_info;
     while (info) {
@@ -362,16 +361,33 @@ struct sim_pte_info *get_pte(tlb_sim_t *sim, unsigned long addr)
     return 0;
 }
 
-int is_in_overlay(unsigned long addr, uint8_t obv[64])
+int is_in_overlay(unsigned long addr, struct sim_pte_info *info)
 {
     unsigned int ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
-    return (obv[ind / 8] >> (ind % 8)) % 2;
+    return ((info->obv[ind / 8] >> (ind % 8)) % 2) || ((info->checkpoint_overlay[ind / 8] >> (ind % 8)) % 2);
 }
 
-void set_overlay(unsigned long addr, struct sim_pte_info *info)
+void set_overlay(unsigned long addr, struct sim_pte_info *info, int checkpoint)
 {
     unsigned int ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
-    info->obv[ind / 8] |= (1 << (ind % 8));
+    if (checkpoint) info->checkpoint_overlay[ind / 8] |= (1 << (ind % 8));
+    else info->obv[ind / 8] |= (1 << (ind % 8));
+    if (!checkpoint) info->split_by_checkpoint = 0;
+    
+    if (checkpoint) {
+      int count = 0;
+      int i, j;
+      for (i = 0; i < sizeof(info->checkpoint_overlay); i++) {
+          for (j = 0; j < 8; j++) {
+              if ((info->checkpoint_overlay[i] >> j) % 2) count++;
+          }
+      }
+      if (count > 255) {
+        for (i = 0; i < sizeof(info->checkpoint_overlay); i++) {
+            info->checkpoint_overlay[i] = ~(info->checkpoint_overlay[i]);
+        }
+      }
+    }
 }
 
 void _tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int overlay)
@@ -408,6 +424,28 @@ int should_reset(struct sim_pte_info *info) {
     return count > 50;
 }
 
+int should_combine(struct mm_struct *mm, unsigned long addr) {
+  unsigned long a = (addr >> SHIFT_2M) << SHIFT_2M;
+  pte_t *pte;
+  pmd_t *pmd;
+  pud_t *pud;
+  pgd_t *pgd;
+  int good_count = 0;
+  for (addr = a; addr < a + (1 << SHIFT_2M); addr += PAGE_SIZE) {
+    pgd = pgd_offset(mm, addr);
+    pud = pud_offset(pgd, addr);
+    pmd = pmd_offset(pud, addr);
+    pte = pte_offset_map(pmd, addr);
+    unsigned long page_table = pte_val(*pte);
+    //index of virtual 4k page in 2m region
+    unsigned long virt_ind = (addr >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
+    //index of physical 4k page in 2m region
+    unsigned long phys_ind = (page_table >> SHIFT_4K) % (1 << (SHIFT_2M - SHIFT_4K));
+    if (virt_ind == phys_ind) good_count++;
+  }
+  return good_count >= 256;
+}
+
 void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, unsigned long page_table)
 {
     //2m aligned address of virtual page
@@ -422,15 +460,10 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
     mutex_lock(&badger_trap_mutex);
 
     tlb_sim_t *sim = mm->tlb_sim;
-    struct sim_pte_info *info = get_pte(sim, addr2m);
-
-    struct test_list_node *tnode = sim->test_list;
-    while(tnode) {
-        if ((addr >> SHIFT_2M) == tnode->addr >> SHIFT_2M) tnode->touched = 1;
-        tnode = tnode->next;
-    }
+    struct sim_pte_info *info = get_sim_pte(sim, addr2m);
 
     if (!huge && !info && virt_ind == phys_ind) {
+      if (should_combine(mm, addr)) {
         //we have a 4k page that's algined like a superpage - can create a new superpage here
         if (print_tlbsim_debug) printk("found aligned 4k page in %lx - creating superpage\n", addr2m << SHIFT_2M);
         if (print_tlbsim_debug) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
@@ -439,11 +472,12 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
         info->phys_addr = phys2m;
         info->next = sim->huge_pte_info;
         sim->huge_pte_info = info;
+      }
     }
 
-    if (info && !huge && virt_ind != phys_ind && !is_in_overlay(addr, info->obv)) {
+    if (info && !huge && virt_ind != phys_ind && !is_in_overlay(addr, info)) {
       if (print_tlbsim_debug) printk("page %lx not in the correct index, setting overlay\n", (addr >> SHIFT_4K) << SHIFT_4K);
-      set_overlay(addr, info);
+      set_overlay(addr, info, 0);
     }
 
     if (info && info->phys_addr != phys2m) {
@@ -457,9 +491,9 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
             info->cow = 0;
             memset(info->obv, 0, sizeof info->obv);
             if (print_tlbsim_debug) printk("hugepage %lx has new physical address, resetting\n", addr2m << SHIFT_2M);
-        } else if (!is_in_overlay(addr, info->obv)) {
+        } else if (!is_in_overlay(addr, info)) {
             if (print_tlbsim_debug) printk("physical address for page %lx changed, setting overlay\n", addr2m << SHIFT_2M);
-            set_overlay(addr, info);
+            set_overlay(addr, info, 0);
         }
     }
 
@@ -469,12 +503,13 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
     }
 
     if (huge) _tlb_miss(mm, addr, 1, 0);
+    else if (info && info->split_by_checkpoint && !checkpoint_use_split) _tlb_miss(mm, addr, 1, 0);
     else _tlb_miss(mm, addr, 0, 0);
 
     if (huge || info) {
         if (!info) {
             if (print_tlbsim_debug > 1) printk("adding new known page %lx\n", addr2m << SHIFT_2M);
-            info = kcalloc(1, sizeof(*info), GFP_KERNEL);
+            info = kcalloc(1, sizeof(*info), GFP_KERNEL);//TODO
             info->virt_addr = addr2m;
             info->phys_addr = phys2m;
             info->next = sim->huge_pte_info;
@@ -482,21 +517,18 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
         }
 
         /*if (info->cow) {
-            //cow hugepage, flushing tlb so we get traps on writes
-            sim->ignore_flush = 1;
-            flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);
-            sim->ignore_flush = 0;
+            //TODO do something to get traps on writes so we can update the other parts of this hugepage
         }*/
 
         //page is in known hugepage, going to 2m tlb (whether or not it's actually a 4k page)
         _tlb_miss(mm, addr, 1, 1);
 
-        if (!huge && write && !is_in_overlay(addr, info->obv) && info->cow) {
+        if (!huge && write && !is_in_overlay(addr, info) && info->cow) {
             //do overlay-on-write
             if (print_tlbsim_debug) printk("got write to %lx in cow page, adding to overlay\n", addr);
-            set_overlay(addr, info);
+            set_overlay(addr, info, 0);
         }
-        if (is_in_overlay(addr, info->obv)) {
+        if (is_in_overlay(addr, info)) {
             //overlay page, going to 4k tlb
             _tlb_miss(mm, addr, 0, 1);
         }
@@ -509,10 +541,10 @@ void tlb_miss(struct mm_struct *mm, unsigned long addr, int huge, int write, uns
 void sim_cow(struct mm_struct *mm, unsigned long addr)
 {
     unsigned long addr2m = addr >> SHIFT_2M;
-    struct sim_pte_info *info = get_pte(mm->tlb_sim, addr2m);
+    struct sim_pte_info *info = get_sim_pte(mm->tlb_sim, addr2m);
     if (info) {
         if (print_tlbsim_debug) printk("cow on %lx, known page\n", addr);
-        set_overlay(addr, info);
+        set_overlay(addr, info, 0);
         info->cow = 1;
         mm->tlb_sim->ignore_flush = 1;
         flush_tlb_mm_range(mm, addr2m << SHIFT_2M, (addr2m + 1) << SHIFT_2M, 0);

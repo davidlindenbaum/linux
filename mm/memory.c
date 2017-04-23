@@ -3324,7 +3324,7 @@ static int handle_pte_fault(struct mm_struct *mm,
 	spinlock_t *ptl;
 
 	pte_t* page_table;
-	int ret;
+	int ret = 0;
 
 	/*
 	 * This may or may not be an actual 'fake fault', so the original
@@ -3333,14 +3333,23 @@ static int handle_pte_fault(struct mm_struct *mm,
 	 * page fault along to the simulation.
 	 */
 	if(mm && mm->badger_trap_en) {
+		mutex_lock(&checkpoint_mutex);
+		page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 		if (flags & FAULT_FLAG_INSTRUCTION) {
 			if(is_pte_reserved(*pte)) *pte = pte_unreserve(*pte);
 		} else if (pte_present(*pte)) {
-			page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 			ret = do_fake_page_fault(mm, address, page_table, flags, 0);
-			pte_unmap_unlock(page_table, ptl);
-			if (ret) return ret;
+			if ((flags & FAULT_FLAG_WRITE) && !pte_write(*pte)) {
+				if (checkpoint_got_write(mm, address, pmd, pte, 0)) {
+					pte_unmap_unlock(page_table, ptl);
+					mutex_unlock(&checkpoint_mutex);
+					return 0;
+				}
+			}
 		}
+		pte_unmap_unlock(page_table, ptl);
+		mutex_unlock(&checkpoint_mutex);
+		if (ret) return ret;
 	}
 
 	/*
@@ -3410,8 +3419,7 @@ static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
-	pmd_t entry;
-	int ret;
+	int ret = 0;
 
 	if (!arch_vma_access_permitted(vma, flags & FAULT_FLAG_WRITE,
 					    flags & FAULT_FLAG_INSTRUCTION,
@@ -3436,13 +3444,22 @@ static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	 * page fault along to the simulation.
 	 */
 	 if(mm && mm->badger_trap_en && pmd && pmd_trans_huge(*pmd)) {
+   	mutex_lock(&checkpoint_mutex);
  		spin_lock(&mm->page_table_lock);
 		if (flags & FAULT_FLAG_INSTRUCTION) {
 			if(is_pmd_reserved(*pmd)) *pmd = pmd_unreserve(*pmd);
 		} else if (pmd_present(*pmd)) {
 			ret = transparent_fake_fault(mm, address, pmd, flags);
+			if ((flags & FAULT_FLAG_WRITE) && !pmd_write(*pmd)) {
+				if (checkpoint_got_write(mm, address, pmd, NULL, 1)) {
+					spin_unlock(&mm->page_table_lock);
+		    	mutex_unlock(&checkpoint_mutex);
+					return 0;
+				}
+			}
 		}
 		spin_unlock(&mm->page_table_lock);
+		mutex_unlock(&checkpoint_mutex);
 		if (ret) return ret;
 	}
 

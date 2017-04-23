@@ -3657,7 +3657,7 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 {
 	pte_t *ptep, entry;
 	spinlock_t *ptl;
-	int ret;
+	int ret = 0;
 	u32 hash;
 	pgoff_t idx;
 	struct page *page = NULL;
@@ -3665,6 +3665,7 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct hstate *h = hstate_vma(vma);
 	struct address_space *mapping;
 	int need_wait_lock = 0;
+	unsigned long orig_addr = address;
 
 	address &= huge_page_mask(h);
 
@@ -3678,14 +3679,23 @@ int hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	 */
 	if(mm && mm->badger_trap_en && ptep)
 	{
+		mutex_lock(&checkpoint_mutex);
 		mutex_lock(&hugetlb_fault_mutex_table[hash]);
 		entry = huge_ptep_get(ptep);
 		if (flags & FAULT_FLAG_INSTRUCTION) {
 			if(is_pte_reserved(*ptep)) *ptep = pte_unreserve(*ptep);
 		} else if (pte_present(entry)) {
-			ret = do_fake_page_fault(mm, address, ptep, flags, 1);
-			if (ret) goto out_mutex;
+			ret = do_fake_page_fault(mm, orig_addr, ptep, flags, 1);
+			/*if ((flags & FAULT_FLAG_WRITE) && !pte_write(entry)) {
+				if (checkpoint_got_write(mm, orig_addr, ptep, 1)) {
+					mutex_unlock(&hugetlb_fault_mutex_table[hash]);
+					mutex_unlock(&checkpoint_mutex);
+					return 0;
+				}
+			}*/
 		}
+		mutex_unlock(&checkpoint_mutex);
+		if (ret) goto out_mutex;
 		mutex_unlock(&hugetlb_fault_mutex_table[hash]);
 	}
 

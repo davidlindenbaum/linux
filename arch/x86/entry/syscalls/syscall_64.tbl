@@ -335,8 +335,10 @@
 326	common	copy_file_range		sys_copy_file_range
 327	64	preadv2			sys_preadv2
 328	64	pwritev2		sys_pwritev2
-510 64  set_tlb_sim_params    sys_set_tlb_sim_params
-511 64  init_badger_trap    sys_init_badger_trap
+500 64  set_tlb_sim_params    sys_set_tlb_sim_params
+501 64  init_badger_trap    sys_init_badger_trap
+502 64  mem_checkpoint_test    sys_mem_checkpoint_test
+503 64  set_checkpoint_params    sys_set_checkpoint_params
 
 #
 # x32-specific system call numbers start at 512 to avoid cache impact

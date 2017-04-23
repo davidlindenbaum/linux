@@ -2379,10 +2379,6 @@ static void collapse_huge_page(struct mm_struct *mm,
 
 	VM_BUG_ON(address & ~HPAGE_PMD_MASK);
 
-	if (mm->badger_trap_en && print_tlbsim_debug) {
-		printk("Huge page collapse\n");
-	}
-
 	/* Only allocate from the target node */
 	gfp = alloc_hugepage_khugepaged_gfpmask() | __GFP_OTHER_NODE | __GFP_THISNODE;
 
@@ -2901,14 +2897,8 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		pmd_t _pmd = pmdp_huge_clear_flush_notify(vma, haddr, pmd);
 		if (is_huge_zero_pmd(_pmd))
 			put_huge_zero_page();
-		if (mm && mm->badger_trap_en && print_tlbsim_debug) {
-			printk("split dax vma\n");
-		}
 		return;
 	} else if (is_huge_zero_pmd(*pmd)) {
-		if (mm && mm->badger_trap_en && print_tlbsim_debug) {
-			printk("split zero pmd\n");
-		}
 		return __split_huge_zero_page_pmd(vma, haddr, pmd);
 	}
 
@@ -3321,9 +3311,6 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 		__split_huge_page(page, list);
 		ret = 0;
 	} else if (IS_ENABLED(CONFIG_DEBUG_VM) && mapcount) {
-		if (current->mm && current->mm->badger_trap_en && print_tlbsim_debug) {
-			printk("Huge page split fail a %lx\n", page_address(head));
-		}
 		spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
 		pr_alert("total_mapcount: %u, page_count(): %u\n",
 				mapcount, count);
@@ -3332,9 +3319,6 @@ int split_huge_page_to_list(struct page *page, struct list_head *list)
 		dump_page(page, "total_mapcount(head) > 0");
 		BUG();
 	} else {
-		if (current->mm && current->mm->badger_trap_en && print_tlbsim_debug) {
-			printk("Huge page split fail b %lx\n", page_address(head));
-		}
 		spin_unlock_irqrestore(&pgdata->split_queue_lock, flags);
 		unfreeze_page(head);
 		ret = -EBUSY;
